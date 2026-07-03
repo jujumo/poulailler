@@ -14,7 +14,7 @@ file and reloading the browser is enough - nothing here needs to change when
 the page's HTML changes, only if the set of {{PLACEHOLDER}} tokens does.
 
 Usage:
-    python3 tools/dev_portal_mock.py [port]   # default port 8080
+    python3 mock/dev_portal_mock.py [port]   # default port 8080
 """
 
 import re

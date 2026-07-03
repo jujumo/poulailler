@@ -35,7 +35,7 @@ iterating on the page's HTML/CSS/JS and form validation, use the
 zero-dependency mock server instead:
 
 ```
-python3 tools/dev_portal_mock.py       # serves http://127.0.0.1:8080/
+python3 mock/dev_portal_mock.py       # serves http://127.0.0.1:8080/
 ```
 
 It mirrors the same routes, field names, and validation ranges as the real
@@ -43,9 +43,9 @@ portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`), backed by
 an in-memory config that resets when you restart it. It does **not**
 compute sunrise/sunset, drive GPIO, or persist to NVS — it's purely for
 the page itself.
-If you change the markup in `WebPortal.cpp`, update
-`tools/dev_portal_mock.py`'s `build_index_html()` to match — it's a
-hand-ported mirror, not generated from the C++.
+Its markup is loaded straight from `src/WebPortalTemplate.h` and re-read on
+every request, so editing that file and reloading the browser is enough —
+there's no separate copy to keep in sync.
 
 Smoke-tested end to end (already verified): `GET /` renders the form,
 `POST /save` persists valid input and rejects invalid input (e.g. an
