@@ -27,6 +27,25 @@ BTS7960 motor supply from the battery directly. Add bulk capacitance
 (1000–2200 µF) near the BTS7960's motor input to absorb stall-current sag
 and avoid browning out the ESP32 mid-move.
 
+## Debugging the config page on your computer (no hardware needed)
+
+`src/WebPortal.cpp` is tightly coupled to ESP32-only APIs (`WiFi.h`,
+`WebServer.h`, `RTClib`), so it can't run on a desktop directly. For
+iterating on the page's HTML/CSS/JS and form validation, use the
+zero-dependency mock server instead:
+
+```
+python3 tools/dev_portal_mock.py       # serves http://127.0.0.1:8080/
+```
+
+It mirrors the same routes, field names, and validation ranges as the real
+portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`), backed by
+an in-memory config that resets when you restart it. It does **not** run
+`SunCalc`, drive GPIO, or persist to NVS — it's purely for the page itself.
+If you change the markup in `WebPortal.cpp`, update
+`tools/dev_portal_mock.py`'s `build_index_html()` to match — it's a
+hand-ported mirror, not generated from the C++.
+
 ## Building and flashing
 
 ```
