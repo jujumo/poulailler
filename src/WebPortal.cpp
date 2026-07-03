@@ -61,21 +61,42 @@ String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
     return minutesToHhMm(eventLocal.hour() * 60 + eventLocal.minute());
 }
 
-// The UTC time-of-day a configured LOCAL absolute open/close time currently
-// resolves to, for display next to its time picker. Recomputed fresh on
-// every page load using today's date (same as Scheduler), rather than
-// stored, so it always reflects today's DST status rather than a stale
-// snapshot from whenever it was last saved. This is inherently a snapshot
-// of "if saved today" though - the form has no JS to recompute it live as
-// you change the picker before saving.
-String localAbsToUtcHhMm(uint16_t localMinutes, RtcManager& rtc, const char* zoneName) {
-    if (!rtc.isTimeValid()) return "unknown - sync time first";
+struct ResolvedSchedule {
+    String utc;
+    String local;
+};
 
-    DateTime today = rtc.now();
-    DateTime localTarget(today.year(), today.month(), today.day(), localMinutes / 60,
-                          localMinutes % 60, 0);
-    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
-    return minutesToHhMm(utcTarget.hour() * 60 + utcTarget.minute());
+// What a configured open/close schedule (absolute or sun-offset) actually
+// resolves to today, in both UTC and local time - the exact same
+// Scheduler::resolveUtcMinutes() computation handleDueActions() schedules
+// against, so this is never out of sync with what will really happen.
+// Recomputed fresh on every page load using today's date, rather than
+// stored, so it reflects today's DST status rather than a stale snapshot
+// from whenever it was last saved. This is inherently a snapshot of "if
+// saved today" though - the form has no JS to recompute it live as you
+// change the picker before saving.
+ResolvedSchedule resolveScheduleForDisplay(const Config& cfg, RtcManager& rtc, bool isOpen) {
+    if (!rtc.isTimeValid()) return {"unknown - sync time first", "unknown - sync time first"};
+
+    DateTime utcNow = rtc.now();
+    Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, utcNow.year(), utcNow.month(), utcNow.day());
+
+    ScheduleMode mode = isOpen ? cfg.openMode : cfg.closeMode;
+    uint16_t absMinutes = isOpen ? cfg.openAbsMinutes : cfg.closeAbsMinutes;
+    int16_t sunOffsetMinutes = isOpen ? cfg.openSunOffsetMinutes : cfg.closeSunOffsetMinutes;
+    int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
+
+    int utcMinutes = Scheduler::resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes,
+                                                   sunEventUtcMinutes, sun.valid, utcNow,
+                                                   cfg.timezone);
+    DateTime utcTarget(utcNow.year(), utcNow.month(), utcNow.day(), utcMinutes / 60,
+                        utcMinutes % 60, 0);
+    DateTime localTarget = TimeZone::toLocal(utcTarget, cfg.timezone).dt;
+
+    ResolvedSchedule result;
+    result.utc = minutesToHhMm(utcMinutes);
+    result.local = minutesToHhMm(localTarget.hour() * 60 + localTarget.minute());
+    return result;
 }
 
 // Formats a signed UTC offset like "+02:00", with " (DST)" appended when the
@@ -177,17 +198,21 @@ String WebPortal::buildIndexHtml() {
 
     html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
-    html.replace("{{OPEN_ABS_UTC}}", localAbsToUtcHhMm(cfg_.openAbsMinutes, rtc_, cfg_.timezone));
     html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
     html.replace("{{SUNRISE}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/true));
+    ResolvedSchedule openResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
+    html.replace("{{OPEN_UTC}}", openResolved.utc);
+    html.replace("{{OPEN_LOCAL}}", openResolved.local);
 
     html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
-    html.replace("{{CLOSE_ABS_UTC}}", localAbsToUtcHhMm(cfg_.closeAbsMinutes, rtc_, cfg_.timezone));
     html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
     html.replace("{{SUNSET}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/false));
+    ResolvedSchedule closeResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
+    html.replace("{{CLOSE_UTC}}", closeResolved.utc);
+    html.replace("{{CLOSE_LOCAL}}", closeResolved.local);
 
     html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
 

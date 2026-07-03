@@ -256,18 +256,43 @@ def next_sun_event_hhmm(is_sunrise):
     return minutes_to_hhmm(event_local.hour * 60 + event_local.minute)
 
 
-def local_abs_to_utc_hhmm(local_minutes):
-    """Mirrors WebPortal.cpp's localAbsToUtcHhMm(): the UTC time-of-day a
-    configured LOCAL absolute time currently resolves to, using today's
-    date, for display next to the time picker."""
-    if not rtc_state["valid"]:
-        return "unknown - sync time first"
-
-    today = rtc_now_utc().astimezone(ZoneInfo(config["timezone"]))
-    local_target = today.replace(hour=local_minutes // 60, minute=local_minutes % 60, second=0,
-                                  microsecond=0)
+def resolve_utc_minutes(mode, abs_minutes, sun_offset_minutes, sun_event_utc_minutes, utc_day):
+    """Mirrors Scheduler.cpp's resolveUtcMinutes(): sun-offset mode is
+    already UTC-native; absolute mode is user-entered local time and must
+    be resolved fresh for this specific UTC calendar day so a DST
+    transition is picked up automatically. Falls back to absolute if
+    sun-offset mode is selected but sunrise/sunset isn't available."""
+    if mode == "sun" and sun_event_utc_minutes is not None:
+        return (sun_event_utc_minutes + sun_offset_minutes) % 1440
+    local_target = datetime(utc_day.year, utc_day.month, utc_day.day, abs_minutes // 60,
+                             abs_minutes % 60, tzinfo=ZoneInfo(config["timezone"]))
     utc_target = local_target.astimezone(timezone.utc)
-    return minutes_to_hhmm(utc_target.hour * 60 + utc_target.minute)
+    return utc_target.hour * 60 + utc_target.minute
+
+
+def resolve_schedule_for_display(is_open):
+    """Mirrors WebPortal.cpp's resolveScheduleForDisplay(): what a
+    configured open/close schedule actually resolves to today, in both UTC
+    and local time, via the same resolve_utc_minutes() computation
+    Scheduler schedules against. Returns (utc_hhmm, local_hhmm)."""
+    if not rtc_state["valid"]:
+        return "unknown - sync time first", "unknown - sync time first"
+
+    utc_now = rtc_now_utc()
+    sunrise_min, sunset_min = SolarCalculator.sun_times_minutes(
+        config["lat"], config["lon"], 0, utc_now.year, utc_now.month, utc_now.day)
+
+    mode = config["openMode"] if is_open else config["closeMode"]
+    abs_minutes = config["openAbsMinutes"] if is_open else config["closeAbsMinutes"]
+    sun_offset_minutes = config["openSunOffsetMinutes"] if is_open else config["closeSunOffsetMinutes"]
+    sun_event_utc_minutes = sunrise_min if is_open else sunset_min
+
+    utc_minutes = resolve_utc_minutes(mode, abs_minutes, sun_offset_minutes, sun_event_utc_minutes,
+                                       utc_now)
+    utc_target = utc_now.replace(hour=utc_minutes // 60, minute=utc_minutes % 60, second=0,
+                                  microsecond=0)
+    local_target = utc_target.astimezone(ZoneInfo(config["timezone"]))
+    return minutes_to_hhmm(utc_minutes), minutes_to_hhmm(local_target.hour * 60 + local_target.minute)
 
 
 _TEMPLATE_RE = re.compile(r'kIndexPageTemplate\[\]\s*=\s*R"HTML\((.*)\)HTML"', re.DOTALL)
@@ -323,17 +348,21 @@ def build_index_html():
 
     html = html.replace("{{OPEN_ABS_CHECKED}}", " checked" if config["openMode"] == "absolute" else "")
     html = html.replace("{{OPEN_ABS}}", minutes_to_hhmm(config["openAbsMinutes"]))
-    html = html.replace("{{OPEN_ABS_UTC}}", local_abs_to_utc_hhmm(config["openAbsMinutes"]))
     html = html.replace("{{OPEN_SUN_CHECKED}}", " checked" if config["openMode"] == "sun" else "")
     html = html.replace("{{OPEN_SUN_OFF}}", str(config["openSunOffsetMinutes"]))
     html = html.replace("{{SUNRISE}}", next_sun_event_hhmm(is_sunrise=True))
+    open_utc, open_local = resolve_schedule_for_display(is_open=True)
+    html = html.replace("{{OPEN_UTC}}", open_utc)
+    html = html.replace("{{OPEN_LOCAL}}", open_local)
 
     html = html.replace("{{CLOSE_ABS_CHECKED}}", " checked" if config["closeMode"] == "absolute" else "")
     html = html.replace("{{CLOSE_ABS}}", minutes_to_hhmm(config["closeAbsMinutes"]))
-    html = html.replace("{{CLOSE_ABS_UTC}}", local_abs_to_utc_hhmm(config["closeAbsMinutes"]))
     html = html.replace("{{CLOSE_SUN_CHECKED}}", " checked" if config["closeMode"] == "sun" else "")
     html = html.replace("{{CLOSE_SUN_OFF}}", str(config["closeSunOffsetMinutes"]))
     html = html.replace("{{SUNSET}}", next_sun_event_hhmm(is_sunrise=False))
+    close_utc, close_local = resolve_schedule_for_display(is_open=False)
+    html = html.replace("{{CLOSE_UTC}}", close_utc)
+    html = html.replace("{{CLOSE_LOCAL}}", close_local)
 
     html = html.replace("{{MOTOR_RUN_MS}}", str(config["motorRunMs"]))
 

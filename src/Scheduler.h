@@ -19,6 +19,14 @@ struct SunTimes {
 // must fall back to absolute-time config rather than use the output.
 SunTimes computeSunTimes(const Config& cfg, int year, int month, int day);
 
+// Resolves a configured open/close schedule (absolute or sun-offset) to a
+// UTC minute-of-day for the given UTC calendar day - the same computation
+// handleDueActions()/armNextAlarmAndSleep() schedule against, exposed so
+// WebPortal can show the user what a schedule actually resolves to.
+int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
+                       int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
+                       const char* zoneName);
+
 // Call after waking from an RTC alarm or the fallback timer. No-op if the
 // RTC has no valid time yet (first boot, never configured).
 void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorController& door);
