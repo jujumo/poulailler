@@ -2,6 +2,8 @@
 
 #include <WiFi.h>
 
+#include "WebPortalTemplate.h"
+
 namespace {
 
 constexpr const char* kApSsid = "CoopDoor-Setup";
@@ -24,23 +26,6 @@ String minutesToHhMm(int minutes) {
 }
 
 bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
-
-const char* kPageHead =
-    "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>Coop Door Setup</title><style>"
-    "body{font-family:sans-serif;max-width:480px;margin:1em auto;padding:0 1em}"
-    "fieldset{margin-bottom:1em}label{display:block;margin-top:.5em}"
-    "input,select{width:100%;box-sizing:border-box;padding:.4em;margin-top:.2em}"
-    "button{padding:.6em 1em;margin-top:.5em}"
-    ".msg{background:#eef;padding:.5em;border-radius:4px;margin-bottom:1em}"
-    ".force{background:#fee}"
-    "</style></head><body>"
-    "<h2>Coop Door Setup</h2>"
-    "<p>This configuration window is only open for 5 minutes after power-on. "
-    "Power-cycle the board to reopen it.</p>";
-
-const char* kPageFoot = "</body></html>";
 
 }  // namespace
 
@@ -82,94 +67,42 @@ void WebPortal::redirectToRoot() {
 }
 
 String WebPortal::buildIndexHtml() {
-    String html;
-    html.reserve(4096);
-    html += kPageHead;
+    String html(kIndexPageTemplate);
 
+    String statusBlock;
     if (statusMessage_.length() > 0) {
-        html += "<p class='msg'>" + statusMessage_ + "</p>";
+        statusBlock = "<p class='msg'>" + statusMessage_ + "</p>";
         statusMessage_ = "";
     }
+    html.replace("{{STATUS_BLOCK}}", statusBlock);
 
     DateTime now = rtc_.now();
     char nowBuf[32];
     snprintf(nowBuf, sizeof(nowBuf), "%04d-%02d-%02d %02d:%02d:%02d", now.year(), now.month(),
              now.day(), now.hour(), now.minute(), now.second());
+    html.replace("{{NOW}}", nowBuf);
+    html.replace("{{NOW_SUFFIX}}", rtc_.isTimeValid() ? "" : " (not set - please sync)");
 
-    html += "<fieldset><legend>Current RTC time</legend>";
-    html += "<p>" + String(nowBuf) + (rtc_.isTimeValid() ? "" : " (not set - please sync)") + "</p>";
-    html +=
-        "<form method='POST' action='/settime' onsubmit='return fillTime(this)'>"
-        "<input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>"
-        "<input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>"
-        "<button type='submit'>Sync time from this device</button></form>";
-    html += "</fieldset>";
+    html.replace("{{LAT}}", String(cfg_.lat, 4));
+    html.replace("{{LON}}", String(cfg_.lon, 4));
+    html.replace("{{UTC_OFF}}", String(cfg_.utcOffsetMinutes));
 
-    html += "<form method='POST' action='/save'>";
+    html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
+    html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
+    html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
+    html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
 
-    html += "<fieldset><legend>Location</legend>";
-    html += "<label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='" +
-            String(cfg_.lat, 4) + "'></label>";
-    html += "<label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' value='" +
-            String(cfg_.lon, 4) + "'></label>";
-    html +=
-        "<label>UTC offset, minutes, no DST (-720..840)<input type='number' name='utcOff' "
-        "value='" +
-        String(cfg_.utcOffsetMinutes) + "'></label>";
-    html += "</fieldset>";
+    html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
+    html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
+    html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
+    html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
 
-    html += "<fieldset><legend>Door opens</legend>";
-    html += "<label><input type='radio' name='openMode' value='absolute'" +
-            String(cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "") +
-            "> At a fixed time</label>";
-    html += "<input type='time' name='openAbs' value='" + minutesToHhMm(cfg_.openAbsMinutes) + "'>";
-    html += "<label><input type='radio' name='openMode' value='sun'" +
-            String(cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "") +
-            "> Relative to sunrise (minutes offset, +/-)</label>";
-    html += "<input type='number' name='openSunOff' value='" + String(cfg_.openSunOffsetMinutes) +
-            "'>";
-    html += "</fieldset>";
+    html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
 
-    html += "<fieldset><legend>Door closes</legend>";
-    html += "<label><input type='radio' name='closeMode' value='absolute'" +
-            String(cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "") +
-            "> At a fixed time</label>";
-    html += "<input type='time' name='closeAbs' value='" + minutesToHhMm(cfg_.closeAbsMinutes) + "'>";
-    html += "<label><input type='radio' name='closeMode' value='sun'" +
-            String(cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "") +
-            "> Relative to sunset (minutes offset, +/-)</label>";
-    html += "<input type='number' name='closeSunOff' value='" + String(cfg_.closeSunOffsetMinutes) +
-            "'>";
-    html += "</fieldset>";
+    html.replace("{{DOOR_STATE}}", cfg_.doorState == DoorState::OPEN     ? "OPEN"
+                                    : cfg_.doorState == DoorState::CLOSED ? "CLOSED"
+                                                                          : "UNKNOWN");
 
-    html += "<fieldset><legend>Motor</legend>";
-    html += "<label>Run duration, ms<input type='number' name='motorRunMs' value='" +
-            String(cfg_.motorRunMs) + "'></label>";
-    html += "</fieldset>";
-
-    html += "<button type='submit'>Save settings</button></form>";
-
-    html += "<fieldset class='force'><legend>Debug</legend>";
-    html += "<form method='POST' action='/force-open' style='display:inline'>"
-            "<button type='submit'>Force Open</button></form> ";
-    html += "<form method='POST' action='/force-close' style='display:inline'>"
-            "<button type='submit'>Force Close</button></form>";
-    html += "<p>Door state: " +
-            String(cfg_.doorState == DoorState::OPEN     ? "OPEN"
-                   : cfg_.doorState == DoorState::CLOSED  ? "CLOSED"
-                                                           : "UNKNOWN") +
-            "</p>";
-    html += "</fieldset>";
-
-    html +=
-        "<script>"
-        "function fillTime(f){var d=new Date();"
-        "f.y.value=d.getFullYear();f.mo.value=d.getMonth()+1;f.d.value=d.getDate();"
-        "f.h.value=d.getHours();f.mi.value=d.getMinutes();f.s.value=d.getSeconds();"
-        "return true;}"
-        "</script>";
-
-    html += kPageFoot;
     return html;
 }
 

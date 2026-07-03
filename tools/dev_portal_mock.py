@@ -8,18 +8,24 @@ It does NOT run SunCalc, does NOT touch GPIO/NVS/RTC hardware, and resets
 its in-memory state whenever you restart it - it's for iterating on the
 page itself, not for testing scheduling/motor/deep-sleep logic.
 
-If you change src/WebPortal.cpp's markup, update build_index_html() below
-to match - this is a hand-ported mirror, not generated from the C++.
+The markup itself is loaded straight from src/WebPortalTemplate.h (the same
+file the firmware compiles in) and re-read on every request, so editing that
+file and reloading the browser is enough - nothing here needs to change when
+the page's HTML changes, only if the set of {{PLACEHOLDER}} tokens does.
 
 Usage:
     python3 tools/dev_portal_mock.py [port]   # default port 8080
 """
 
+import re
 import sys
 import time
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs
+
+TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "src" / "WebPortalTemplate.h"
 
 # Mirrors the Config struct / defaults in src/ConfigStore.h
 config = {
@@ -67,117 +73,50 @@ def parse_hhmm_to_minutes(value):
     return hh * 60 + mm
 
 
-PAGE_HEAD = """<!DOCTYPE html><html><head><meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Coop Door Setup</title><style>
-body{font-family:sans-serif;max-width:480px;margin:1em auto;padding:0 1em}
-fieldset{margin-bottom:1em}label{display:block;margin-top:.5em}
-input,select{width:100%;box-sizing:border-box;padding:.4em;margin-top:.2em}
-button{padding:.6em 1em;margin-top:.5em}
-.msg{background:#eef;padding:.5em;border-radius:4px;margin-bottom:1em}
-.force{background:#fee}
-</style></head><body>
-<h2>Coop Door Setup</h2>
-<p>This configuration window is only open for 5 minutes after power-on.
-Power-cycle the board to reopen it.</p>"""
+_TEMPLATE_RE = re.compile(r'kIndexPageTemplate\[\]\s*=\s*R"HTML\((.*)\)HTML"', re.DOTALL)
 
-PAGE_FOOT = "</body></html>"
+
+def load_template():
+    text = TEMPLATE_PATH.read_text()
+    match = _TEMPLATE_RE.search(text)
+    if not match:
+        raise RuntimeError(f"Could not find kIndexPageTemplate raw string literal in {TEMPLATE_PATH}")
+    return match.group(1)
 
 
 def build_index_html():
     global status_message
-    html = [PAGE_HEAD]
+    html = load_template()
 
+    status_block = ""
     if status_message:
-        html.append(f"<p class='msg'>{status_message}</p>")
+        status_block = f"<p class='msg'>{status_message}</p>"
         status_message = ""
+    html = html.replace("{{STATUS_BLOCK}}", status_block)
 
     now = rtc_now()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
-    html.append("<fieldset><legend>Current RTC time</legend>")
-    suffix = "" if rtc_state["valid"] else " (not set - please sync)"
-    html.append(f"<p>{now_str}{suffix}</p>")
-    html.append(
-        "<form method='POST' action='/settime' onsubmit='return fillTime(this)'>"
-        "<input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>"
-        "<input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>"
-        "<button type='submit'>Sync time from this device</button></form>"
-    )
-    html.append("</fieldset>")
+    html = html.replace("{{NOW}}", now.strftime("%Y-%m-%d %H:%M:%S"))
+    html = html.replace("{{NOW_SUFFIX}}", "" if rtc_state["valid"] else " (not set - please sync)")
 
-    html.append("<form method='POST' action='/save'>")
+    html = html.replace("{{LAT}}", f"{config['lat']:.4f}")
+    html = html.replace("{{LON}}", f"{config['lon']:.4f}")
+    html = html.replace("{{UTC_OFF}}", str(config["utcOffsetMinutes"]))
 
-    html.append("<fieldset><legend>Location</legend>")
-    html.append(
-        f"<label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' "
-        f"value='{config['lat']:.4f}'></label>"
-    )
-    html.append(
-        f"<label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' "
-        f"value='{config['lon']:.4f}'></label>"
-    )
-    html.append(
-        f"<label>UTC offset, minutes, no DST (-720..840)<input type='number' name='utcOff' "
-        f"value='{config['utcOffsetMinutes']}'></label>"
-    )
-    html.append("</fieldset>")
+    html = html.replace("{{OPEN_ABS_CHECKED}}", " checked" if config["openMode"] == "absolute" else "")
+    html = html.replace("{{OPEN_ABS}}", minutes_to_hhmm(config["openAbsMinutes"]))
+    html = html.replace("{{OPEN_SUN_CHECKED}}", " checked" if config["openMode"] == "sun" else "")
+    html = html.replace("{{OPEN_SUN_OFF}}", str(config["openSunOffsetMinutes"]))
 
-    html.append("<fieldset><legend>Door opens</legend>")
-    checked = " checked" if config["openMode"] == "absolute" else ""
-    html.append(f"<label><input type='radio' name='openMode' value='absolute'{checked}> At a fixed time</label>")
-    html.append(f"<input type='time' name='openAbs' value='{minutes_to_hhmm(config['openAbsMinutes'])}'>")
-    checked = " checked" if config["openMode"] == "sun" else ""
-    html.append(
-        f"<label><input type='radio' name='openMode' value='sun'{checked}> "
-        "Relative to sunrise (minutes offset, +/-)</label>"
-    )
-    html.append(f"<input type='number' name='openSunOff' value='{config['openSunOffsetMinutes']}'>")
-    html.append("</fieldset>")
+    html = html.replace("{{CLOSE_ABS_CHECKED}}", " checked" if config["closeMode"] == "absolute" else "")
+    html = html.replace("{{CLOSE_ABS}}", minutes_to_hhmm(config["closeAbsMinutes"]))
+    html = html.replace("{{CLOSE_SUN_CHECKED}}", " checked" if config["closeMode"] == "sun" else "")
+    html = html.replace("{{CLOSE_SUN_OFF}}", str(config["closeSunOffsetMinutes"]))
 
-    html.append("<fieldset><legend>Door closes</legend>")
-    checked = " checked" if config["closeMode"] == "absolute" else ""
-    html.append(f"<label><input type='radio' name='closeMode' value='absolute'{checked}> At a fixed time</label>")
-    html.append(f"<input type='time' name='closeAbs' value='{minutes_to_hhmm(config['closeAbsMinutes'])}'>")
-    checked = " checked" if config["closeMode"] == "sun" else ""
-    html.append(
-        f"<label><input type='radio' name='closeMode' value='sun'{checked}> "
-        "Relative to sunset (minutes offset, +/-)</label>"
-    )
-    html.append(f"<input type='number' name='closeSunOff' value='{config['closeSunOffsetMinutes']}'>")
-    html.append("</fieldset>")
+    html = html.replace("{{MOTOR_RUN_MS}}", str(config["motorRunMs"]))
 
-    html.append("<fieldset><legend>Motor</legend>")
-    html.append(
-        f"<label>Run duration, ms<input type='number' name='motorRunMs' "
-        f"value='{config['motorRunMs']}'></label>"
-    )
-    html.append("</fieldset>")
+    html = html.replace("{{DOOR_STATE}}", config["doorState"])
 
-    html.append("<button type='submit'>Save settings</button></form>")
-
-    html.append("<fieldset class='force'><legend>Debug</legend>")
-    html.append(
-        "<form method='POST' action='/force-open' style='display:inline'>"
-        "<button type='submit'>Force Open</button></form> "
-    )
-    html.append(
-        "<form method='POST' action='/force-close' style='display:inline'>"
-        "<button type='submit'>Force Close</button></form>"
-    )
-    html.append(f"<p>Door state: {config['doorState']}</p>")
-    html.append("</fieldset>")
-
-    html.append(
-        "<script>"
-        "function fillTime(f){var d=new Date();"
-        "f.y.value=d.getFullYear();f.mo.value=d.getMonth()+1;f.d.value=d.getDate();"
-        "f.h.value=d.getHours();f.mi.value=d.getMinutes();f.s.value=d.getSeconds();"
-        "return true;}"
-        "</script>"
-    )
-
-    html.append(PAGE_FOOT)
-    return "".join(html)
+    return html
 
 
 class Handler(BaseHTTPRequestHandler):
