@@ -12,6 +12,7 @@ namespace {
 
 constexpr const char* kApSsid = WIFI_AP_SSID;
 constexpr const char* kApPassword = WIFI_AP_PASSWORD;
+const IPAddress kApIp(192, 168, 4, 1);
 
 // Parses "HH:MM" into minutes-since-midnight. Returns -1 on malformed input.
 int parseHhMmToMinutes(const String& value) {
@@ -129,7 +130,7 @@ String buildTimezoneOptions(const char* selected) {
 }  // namespace
 
 WebPortal::WebPortal(ConfigStore& store, RtcManager& rtc, DoorController& door)
-    : store_(store), rtc_(rtc), door_(door), server_(80) {}
+    : store_(store), rtc_(rtc), door_(door), server_(80), httpsStub_(443) {}
 
 void WebPortal::run(unsigned long durationMs) {
     cfg_ = store_.load();
@@ -137,16 +138,44 @@ void WebPortal::run(unsigned long durationMs) {
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid, kApPassword);
 
+    // softAP() alone never hands out a DNS server via DHCP (arduino-esp32
+    // only does that inside softAPConfig(), and only when its dns argument
+    // is non-zero) - without this, clients get no DNS server at all and
+    // can't resolve anything, so they never even reach dnsServer_ below.
+    WiFi.softAPConfig(kApIp, kApIp, IPAddress(255, 255, 255, 0), IPAddress(0, 0, 0, 0), kApIp);
+
+    // Answer every DNS query with our own IP so phones/laptops' captive-
+    // portal detection (which resolves a real hostname, e.g.
+    // connectivitycheck.gstatic.com or captive.apple.com) lands on us and
+    // gets redirected to "/" by the onNotFound handler below - that's what
+    // makes the OS auto-open the config page instead of requiring the user
+    // to type the IP manually.
+    dnsServer_.start(53, "*", kApIp);
+
+    // Best-effort for Android, which probes connectivity over HTTPS first
+    // (https://www.google.com/generate_204 by default). We can't complete a
+    // real TLS handshake without a certificate the phone would trust, but
+    // accepting the TCP connection and closing it immediately at least
+    // avoids an outright "connection refused" on port 443, which some
+    // Android versions treat as "no internet, don't bother showing a
+    // sign-in prompt" - unverified whether this changes behavior on any
+    // given device.
+    httpsStub_.begin();
+
     setupRoutes();
     server_.begin();
 
     unsigned long start = millis();
     while (millis() - start < durationMs) {
+        dnsServer_.processNextRequest();
+        if (httpsStub_.hasClient()) httpsStub_.accept().stop();
         server_.handleClient();
         delay(2);
     }
 
+    httpsStub_.stop();
     server_.stop();
+    dnsServer_.stop();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
 }

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <DNSServer.h>
 #include <WebServer.h>
+#include <WiFiServer.h>
 
 #include "ConfigStore.h"
 #include "DoorController.h"
@@ -33,6 +35,8 @@ private:
     RtcManager& rtc_;
     DoorController& door_;
     WebServer server_;
+    DNSServer dnsServer_;
+    WiFiServer httpsStub_;
     Config cfg_;
     String statusMessage_;
 };

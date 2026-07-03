@@ -75,17 +75,21 @@ out-of-range latitude) with a 400 instead of partially saving, and
 
 ## First boot / configuration
 
+![Config page screenshot](doc/screenshot.png)
+
 1. Power on the board. It starts a WiFi access point: **SSID `CoopDoor-Setup`**,
    password `coopdoor1234` (change it in `include/config.h` if you like).
-2. Connect a phone/laptop to that AP and browse to `http://192.168.4.1/`.
+2. Connect a phone/laptop to that AP. Most devices will auto-prompt to open
+   the config page (captive portal detection); if yours doesn't, browse to
+   `http://192.168.4.1/` manually.
 3. Click **"Sync time from this device"** first — the DS3231 has no other
    time source, so accuracy depends entirely on your phone/laptop clock.
 4. Set latitude/longitude and pick your timezone from the list — DST is
    handled automatically for the zones in `src/TimeZones.h`.
 5. Choose open/close mode (fixed time, or offset from sunrise/sunset) and
-   save. A fixed time is entered in local time; the page shows the UTC time
-   it currently resolves to next to it, since that's what's actually
-   compared against under the hood.
+   save. A fixed time is entered in local time; each fieldset shows the
+   resolved open/close time in both UTC and local, since UTC is what's
+   actually compared against under the hood.
 6. Use **Force Open** / **Force Close** to verify the motor direction and
    confirm `motorRunMs` is long enough for a full travel (with margin — aim
    for ~15–20% more than the bare minimum, since motor speed sags as the
