@@ -66,9 +66,8 @@ pio device monitor
 2. Connect a phone/laptop to that AP and browse to `http://192.168.4.1/`.
 3. Click **"Sync time from this device"** first — the DS3231 has no other
    time source, so accuracy depends entirely on your phone/laptop clock.
-4. Set latitude/longitude and the fixed UTC offset (no DST support — if your
-   region observes DST, come back and change this by two power-cycles a
-   year).
+4. Set latitude/longitude and pick your timezone from the list — DST is
+   handled automatically for the zones in `src/TimeZones.h`.
 5. Choose open/close mode (fixed time, or offset from sunrise/sunset) and
    save.
 6. Use **Force Open** / **Force Close** to verify the motor direction and

@@ -5,6 +5,7 @@
 #include <esp_sleep.h>
 
 #include "PinConfig.h"
+#include "TimeZone.h"
 
 namespace {
 
@@ -63,7 +64,16 @@ namespace Scheduler {
 // [0, 1440) for extreme timezone/longitude combinations - normalize here so
 // callers only ever see well-formed minute-of-day values.
 SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
-    Dusk2Dawn location(cfg.lat, cfg.lon, cfg.utcOffsetMinutes / 60.0f);
+    // Dusk2Dawn's `timezone` ctor arg is a plain UTC offset; folding this
+    // date's DST-aware offset straight into it and always passing
+    // isDST=false is equivalent to (and simpler than) passing the *standard*
+    // offset separately with isDST=true, since Dusk2Dawn::sunriseSet() just
+    // adds the two together anyway. Note it truncates this to whole hours,
+    // so half-hour-offset zones (e.g. Asia/Kolkata) lose their :30 here -
+    // a limitation of the library, not of this offset calculation.
+    float timezoneHours =
+        TimeZone::utcOffsetMinutesForLocalDate(year, month, day, cfg.timezone) / 60.0f;
+    Dusk2Dawn location(cfg.lat, cfg.lon, timezoneHours);
     int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
     int sunset = location.sunset(year, month, day, /*isDST=*/false);
 
@@ -83,7 +93,9 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
         return;
     }
 
-    DateTime now = rtc.now();
+    // The DS3231 stores UTC; open/close times are configured in local wall
+    // clock, so resolve "now" to local before comparing against them.
+    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
     uint16_t today = daysSinceEpoch(now);
     int nowMinutes = now.hour() * 60 + now.minute();
 
@@ -112,7 +124,9 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         goToSleep(kInvalidTimeRetrySeconds, /*armExt0=*/false);
     }
 
-    DateTime now = rtc.now();
+    // The DS3231 stores UTC; open/close times are configured in local wall
+    // clock, so resolve "now" to local before comparing against them.
+    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     uint16_t today = daysSinceEpoch(now);
 
@@ -132,8 +146,13 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
     // at the *next* occurrence of the given time-of-day, so a "today" value
     // that has already passed simply rolls over to tomorrow in hardware -
-    // no need to reason about which calendar day to arm for here.
+    // no need to reason about which calendar day to arm for here. We do
+    // still need to know *which* calendar day the chosen local minute
+    // belongs to, though, since converting it to the UTC time-of-day the
+    // alarm actually runs on depends on whether that specific day is inside
+    // a DST period.
     int nextMinute;
+    DateTime targetDay = now;
     if (openPending && closePending) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
     } else if (openPending) {
@@ -142,11 +161,13 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         nextMinute = closeTodayMin;
     } else {
         nextMinute = openTomorrowMin;
+        targetDay = tomorrow;
     }
 
-    uint8_t hh = static_cast<uint8_t>(nextMinute / 60);
-    uint8_t mm = static_cast<uint8_t>(nextMinute % 60);
-    rtc.setNextAlarm(hh, mm, 0);
+    DateTime targetLocal(targetDay.year(), targetDay.month(), targetDay.day(), nextMinute / 60,
+                          nextMinute % 60, 0);
+    DateTime targetUtc = TimeZone::toUtc(targetLocal, cfg.timezone);
+    rtc.setNextAlarm(targetUtc.hour(), targetUtc.minute(), targetUtc.second());
     rtc.clearAlarm();
 
     goToSleep(kFallbackSleepSeconds, /*armExt0=*/true);

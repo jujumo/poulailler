@@ -18,7 +18,13 @@ button{padding:.6em 1em;margin-top:.5em}
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
 {{STATUS_BLOCK}}
 <fieldset><legend>Current RTC time</legend>
-<p>{{NOW}}{{NOW_SUFFIX}}</p>
+{{NOW_SUFFIX}}
+<p>UTC time: {{UTC_TIME}}</p>
+<p>Local time: {{LOCAL_TIME}}</p>
+<p>UTC offset: {{UTC_OFFSET}}</p>
+<p>Timezone: {{TIMEZONE_NAME}}</p>
+<p>Next sunrise: {{SUNRISE}}</p>
+<p>Next sunset: {{SUNSET}}</p>
 <form method='POST' action='/settime' onsubmit='return fillTime(this)'>
 <input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
 <input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>
@@ -28,18 +34,18 @@ button{padding:.6em 1em;margin-top:.5em}
 <fieldset><legend>Location</legend>
 <label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='{{LAT}}'></label>
 <label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' value='{{LON}}'></label>
-<label>UTC offset, minutes, no DST (-720..840)<input type='number' name='utcOff' value='{{UTC_OFF}}'></label>
+<label>Timezone<select name='timezone'>{{TIMEZONE_OPTIONS}}</select></label>
 </fieldset>
 <fieldset><legend>Door opens</legend>
 <label><input type='radio' name='openMode' value='absolute'{{OPEN_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='openAbs' value='{{OPEN_ABS}}'>
-<label><input type='radio' name='openMode' value='sun'{{OPEN_SUN_CHECKED}}> Relative to sunrise, next at {{SUNRISE}} (minutes offset, +/-)</label>
+<label><input type='radio' name='openMode' value='sun'{{OPEN_SUN_CHECKED}}> Relative to sunrise (minutes offset, +/-)</label>
 <input type='number' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
 </fieldset>
 <fieldset><legend>Door closes</legend>
 <label><input type='radio' name='closeMode' value='absolute'{{CLOSE_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='closeAbs' value='{{CLOSE_ABS}}'>
-<label><input type='radio' name='closeMode' value='sun'{{CLOSE_SUN_CHECKED}}> Relative to sunset, next at {{SUNSET}} (minutes offset, +/-)</label>
+<label><input type='radio' name='closeMode' value='sun'{{CLOSE_SUN_CHECKED}}> Relative to sunset (minutes offset, +/-)</label>
 <input type='number' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
 </fieldset>
 <fieldset><legend>Motor</legend>

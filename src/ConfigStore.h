@@ -18,7 +18,10 @@ struct Config {
     // edit in the config page, not tied to any real deployment.
     float lat = 45.1885f;
     float lon = 5.7245f;
-    int16_t utcOffsetMinutes = 60;
+    // Zone name from TimeZones.h. Drives both the local-time display and the
+    // sun-time math (via TimeZone.cpp) - see TimeZones.h for why this is a
+    // name lookup rather than a raw UTC offset.
+    char timezone[24] = "Europe/Paris";
 
     ScheduleMode openMode = ScheduleMode::ABSOLUTE;
     uint16_t openAbsMinutes = 420;     // 07:00

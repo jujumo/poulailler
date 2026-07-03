@@ -3,6 +3,8 @@
 #include <WiFi.h>
 
 #include "Scheduler.h"
+#include "TimeZone.h"
+#include "TimeZones.h"
 #include "WebPortalTemplate.h"
 
 namespace {
@@ -34,7 +36,7 @@ bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
 String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
     if (!rtc.isTimeValid()) return "unknown - sync time first";
 
-    DateTime now = rtc.now();
+    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
     Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, now.year(), now.month(), now.day());
     int nowMinutes = now.hour() * 60 + now.minute();
     int eventMinutes = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
@@ -51,6 +53,32 @@ String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
 
     if (!sun.valid) return "N/A (polar day/night)";
     return minutesToHhMm(eventMinutes);
+}
+
+// Formats a signed UTC offset like "+02:00", with " (DST)" appended when the
+// zone's daylight-saving rule is in effect.
+String formatUtcOffset(int offsetMinutes, bool isDst) {
+    char buf[8];
+    int absMinutes = offsetMinutes < 0 ? -offsetMinutes : offsetMinutes;
+    snprintf(buf, sizeof(buf), "%c%02d:%02d", offsetMinutes < 0 ? '-' : '+', absMinutes / 60,
+             absMinutes % 60);
+    String result(buf);
+    if (isDst) result += " (DST)";
+    return result;
+}
+
+String buildTimezoneOptions(const char* selected) {
+    String options;
+    for (size_t i = 0; i < kTimeZoneCount; i++) {
+        options += "<option value='";
+        options += kTimeZones[i].name;
+        options += "'";
+        if (strcmp(kTimeZones[i].name, selected) == 0) options += " selected";
+        options += ">";
+        options += kTimeZones[i].name;
+        options += "</option>";
+    }
+    return options;
 }
 
 }  // namespace
@@ -102,16 +130,27 @@ String WebPortal::buildIndexHtml() {
     }
     html.replace("{{STATUS_BLOCK}}", statusBlock);
 
-    DateTime now = rtc_.now();
-    char nowBuf[32];
-    snprintf(nowBuf, sizeof(nowBuf), "%04d-%02d-%02d %02d:%02d:%02d", now.year(), now.month(),
-             now.day(), now.hour(), now.minute(), now.second());
-    html.replace("{{NOW}}", nowBuf);
-    html.replace("{{NOW_SUFFIX}}", rtc_.isTimeValid() ? "" : " (not set - please sync)");
+    DateTime utcNow = rtc_.now();
+    TimeZone::LocalTime local = TimeZone::toLocal(utcNow, cfg_.timezone);
+
+    char utcBuf[32];
+    snprintf(utcBuf, sizeof(utcBuf), "%04d-%02d-%02d %02d:%02d:%02d", utcNow.year(), utcNow.month(),
+             utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second());
+    char localBuf[32];
+    snprintf(localBuf, sizeof(localBuf), "%04d-%02d-%02d %02d:%02d:%02d", local.dt.year(),
+             local.dt.month(), local.dt.day(), local.dt.hour(), local.dt.minute(),
+             local.dt.second());
+
+    html.replace("{{UTC_TIME}}", utcBuf);
+    html.replace("{{LOCAL_TIME}}", localBuf);
+    html.replace("{{UTC_OFFSET}}", formatUtcOffset(local.utcOffsetMinutes, local.isDst));
+    html.replace("{{TIMEZONE_NAME}}", cfg_.timezone);
+    html.replace("{{NOW_SUFFIX}}",
+                 rtc_.isTimeValid() ? "" : "<p class='msg'>RTC not set - please sync below.</p>");
 
     html.replace("{{LAT}}", String(cfg_.lat, 4));
     html.replace("{{LON}}", String(cfg_.lon, 4));
-    html.replace("{{UTC_OFF}}", String(cfg_.utcOffsetMinutes));
+    html.replace("{{TIMEZONE_OPTIONS}}", buildTimezoneOptions(cfg_.timezone));
 
     html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
@@ -148,9 +187,13 @@ void WebPortal::handleSaveConfig() {
         float v = server_.arg("lon").toFloat();
         if (inRange(v, -180.0f, 180.0f)) next.lon = v; else ok = false;
     }
-    if (server_.hasArg("utcOff")) {
-        int v = server_.arg("utcOff").toInt();
-        if (v >= -720 && v <= 840) next.utcOffsetMinutes = static_cast<int16_t>(v); else ok = false;
+    if (server_.hasArg("timezone")) {
+        String tz = server_.arg("timezone");
+        if (isKnownTimeZoneName(tz.c_str())) {
+            tz.toCharArray(next.timezone, sizeof(next.timezone));
+        } else {
+            ok = false;
+        }
     }
 
     if (server_.hasArg("openMode")) {
@@ -215,7 +258,10 @@ void WebPortal::handleSetTime() {
         return;
     }
 
-    rtc_.setTime(DateTime(year, month, day, hour, minute, second));
+    // The hidden form fields are the browser's local wall clock; the RTC
+    // stores UTC, so convert using the configured timezone before writing.
+    DateTime localWallClock(year, month, day, hour, minute, second);
+    rtc_.setTime(TimeZone::toUtc(localWallClock, cfg_.timezone));
     statusMessage_ = "Time synced from this device.";
     redirectToRoot();
 }

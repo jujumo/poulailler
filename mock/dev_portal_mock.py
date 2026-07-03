@@ -20,18 +20,29 @@ Usage:
 import re
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
 
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "src" / "WebPortalTemplate.h"
+
+# Same curated list as src/TimeZones.h - kept as plain IANA names here since
+# Python's stdlib zoneinfo (unlike the firmware's libc) already knows the
+# real DST rules for any of them.
+TIMEZONES = [
+    "UTC", "Europe/London", "Europe/Paris", "Europe/Helsinki", "Europe/Moscow",
+    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+    "America/Sao_Paulo", "Asia/Dubai", "Asia/Kolkata", "Asia/Shanghai", "Asia/Tokyo",
+    "Australia/Sydney", "Pacific/Auckland",
+]
 
 # Mirrors the Config struct / defaults in src/ConfigStore.h
 config = {
     "lat": 45.1885,
     "lon": 5.7245,
-    "utcOffsetMinutes": 60,
+    "timezone": "Europe/Paris",
     "openMode": "absolute",       # "absolute" | "sun"
     "openAbsMinutes": 420,        # 07:00
     "openSunOffsetMinutes": 0,
@@ -43,17 +54,19 @@ config = {
 }
 
 # Mocks RtcManager: no time is "valid" until /settime is called at least
-# once, same as a DS3231 that has never been set (OSF flag).
-rtc_state = {"valid": False, "set_at_wall": None, "set_to": None}
+# once, same as a DS3231 that has never been set (OSF flag). Stored as UTC,
+# same as the real DS3231 in the firmware's design.
+rtc_state = {"valid": False, "set_at_wall": None, "set_to_utc": None}
+
+
+def rtc_now_utc():
+    if not rtc_state["valid"]:
+        return datetime.now(timezone.utc)  # firmware would refuse to schedule; the mock just shows *something*
+    elapsed = time.monotonic() - rtc_state["set_at_wall"]
+    return rtc_state["set_to_utc"] + timedelta(seconds=elapsed)
+
 
 status_message = ""
-
-
-def rtc_now():
-    if not rtc_state["valid"]:
-        return datetime.now()  # firmware would refuse to schedule; the mock just shows *something*
-    elapsed = time.monotonic() - rtc_state["set_at_wall"]
-    return rtc_state["set_to"] + timedelta(seconds=elapsed)
 
 
 def minutes_to_hhmm(minutes):
@@ -84,6 +97,14 @@ def load_template():
     return match.group(1)
 
 
+def build_timezone_options():
+    opts = []
+    for name in TIMEZONES:
+        selected = " selected" if name == config["timezone"] else ""
+        opts.append(f"<option value='{name}'{selected}>{name}</option>")
+    return "".join(opts)
+
+
 def build_index_html():
     global status_message
     html = load_template()
@@ -94,13 +115,27 @@ def build_index_html():
         status_message = ""
     html = html.replace("{{STATUS_BLOCK}}", status_block)
 
-    now = rtc_now()
-    html = html.replace("{{NOW}}", now.strftime("%Y-%m-%d %H:%M:%S"))
-    html = html.replace("{{NOW_SUFFIX}}", "" if rtc_state["valid"] else " (not set - please sync)")
+    utc_now = rtc_now_utc()
+    local_now = utc_now.astimezone(ZoneInfo(config["timezone"]))
+    offset_minutes = int(local_now.utcoffset().total_seconds() // 60)
+    sign = "+" if offset_minutes >= 0 else "-"
+    abs_minutes = abs(offset_minutes)
+    offset_str = f"{sign}{abs_minutes // 60:02d}:{abs_minutes % 60:02d}"
+    if local_now.dst():
+        offset_str += " (DST)"
+
+    html = html.replace("{{UTC_TIME}}", utc_now.strftime("%Y-%m-%d %H:%M:%S"))
+    html = html.replace("{{LOCAL_TIME}}", local_now.strftime("%Y-%m-%d %H:%M:%S"))
+    html = html.replace("{{UTC_OFFSET}}", offset_str)
+    html = html.replace("{{TIMEZONE_NAME}}", config["timezone"])
+    html = html.replace(
+        "{{NOW_SUFFIX}}",
+        "" if rtc_state["valid"] else "<p class='msg'>RTC not set - please sync below.</p>",
+    )
 
     html = html.replace("{{LAT}}", f"{config['lat']:.4f}")
     html = html.replace("{{LON}}", f"{config['lon']:.4f}")
-    html = html.replace("{{UTC_OFF}}", str(config["utcOffsetMinutes"]))
+    html = html.replace("{{TIMEZONE_OPTIONS}}", build_timezone_options())
 
     html = html.replace("{{OPEN_ABS_CHECKED}}", " checked" if config["openMode"] == "absolute" else "")
     html = html.replace("{{OPEN_ABS}}", minutes_to_hhmm(config["openAbsMinutes"]))
@@ -183,10 +218,10 @@ class Handler(BaseHTTPRequestHandler):
                 v = float(args["lon"])
                 ok &= in_range(v, -180.0, 180.0)
                 next_cfg["lon"] = v
-            if "utcOff" in args:
-                v = int(args["utcOff"])
-                ok &= in_range(v, -720, 840)
-                next_cfg["utcOffsetMinutes"] = v
+            if "timezone" in args:
+                ok &= args["timezone"] in TIMEZONES
+                if args["timezone"] in TIMEZONES:
+                    next_cfg["timezone"] = args["timezone"]
 
             if "openMode" in args:
                 next_cfg["openMode"] = "sun" if args["openMode"] == "sun" else "absolute"
@@ -232,13 +267,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             y, mo, d = int(args["y"]), int(args["mo"]), int(args["d"])
             h, mi, s = int(args["h"]), int(args["mi"]), int(args["s"])
-            dt = datetime(y, mo, d, h, mi, s)
+            # The hidden form fields are the browser's local wall clock; the
+            # RTC stores UTC, so convert using the configured timezone.
+            local_dt = datetime(y, mo, d, h, mi, s, tzinfo=ZoneInfo(config["timezone"]))
         except (KeyError, ValueError):
             self._send_html(400, "<p>Invalid date/time.</p>")
             return
 
         rtc_state["valid"] = True
-        rtc_state["set_to"] = dt
+        rtc_state["set_to_utc"] = local_dt.astimezone(timezone.utc)
         rtc_state["set_at_wall"] = time.monotonic()
         status_message = "Time synced from this device."
         self._redirect_to_root()

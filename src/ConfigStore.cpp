@@ -14,7 +14,7 @@ Config ConfigStore::load() {
     prefs.begin(NAMESPACE, /*readOnly=*/true);
     cfg.lat = prefs.getFloat("lat", cfg.lat);
     cfg.lon = prefs.getFloat("lon", cfg.lon);
-    cfg.utcOffsetMinutes = static_cast<int16_t>(prefs.getShort("utcOff", cfg.utcOffsetMinutes));
+    prefs.getString("timezone", cfg.timezone, sizeof(cfg.timezone));
 
     cfg.openMode = static_cast<ScheduleMode>(prefs.getUChar("openMode", static_cast<uint8_t>(cfg.openMode)));
     cfg.openAbsMinutes = prefs.getUShort("openAbsMin", cfg.openAbsMinutes);
@@ -42,7 +42,7 @@ void ConfigStore::save(const Config& cfg) {
 
     prefs.putFloat("lat", cfg.lat);
     prefs.putFloat("lon", cfg.lon);
-    prefs.putShort("utcOff", cfg.utcOffsetMinutes);
+    prefs.putString("timezone", cfg.timezone);
 
     prefs.putUChar("openMode", static_cast<uint8_t>(cfg.openMode));
     prefs.putUShort("openAbsMin", cfg.openAbsMinutes);
