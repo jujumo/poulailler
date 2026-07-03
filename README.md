@@ -56,10 +56,22 @@ out-of-range latitude) with a 400 instead of partially saving, and
 
 ## Building and flashing
 
-```
-pio run -t upload
-pio device monitor
-```
+1. Create a Python virtualenv and install PlatformIO into it (keeps it off
+   your system Python and sidesteps any broken system-wide `pio` install):
+   ```
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install platformio
+   ```
+2. Build the firmware:
+   ```
+   make build
+   ```
+3. Flash it, then open the serial monitor (or `make flash` to do both):
+   ```
+   make upload
+   make monitor
+   ```
 
 ## First boot / configuration
 
