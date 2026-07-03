@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 
+#include "Scheduler.h"
 #include "WebPortalTemplate.h"
 
 namespace {
@@ -26,6 +27,31 @@ String minutesToHhMm(int minutes) {
 }
 
 bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
+
+// The next occurrence of sunrise/sunset (today's, unless it's already
+// passed, in which case tomorrow's) - mirrors the rollover idea in
+// Scheduler::armNextAlarmAndSleep, just for display rather than scheduling.
+String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
+    if (!rtc.isTimeValid()) return "unknown - sync time first";
+
+    DateTime now = rtc.now();
+    Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, now.year(), now.month(), now.day());
+    int nowMinutes = now.hour() * 60 + now.minute();
+    int eventMinutes = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
+
+    if (sun.valid && nowMinutes >= eventMinutes) {
+        DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
+        Scheduler::SunTimes sunTomorrow =
+            Scheduler::computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
+        if (sunTomorrow.valid) {
+            sun = sunTomorrow;
+            eventMinutes = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
+        }
+    }
+
+    if (!sun.valid) return "N/A (polar day/night)";
+    return minutesToHhMm(eventMinutes);
+}
 
 }  // namespace
 
@@ -91,11 +117,13 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
     html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
+    html.replace("{{SUNRISE}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/true));
 
     html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
     html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
+    html.replace("{{SUNSET}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/false));
 
     html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
 

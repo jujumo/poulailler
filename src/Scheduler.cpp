@@ -28,29 +28,6 @@ int normalizeMinutes(int minutes) {
     return minutes;
 }
 
-struct SunTimes {
-    int sunriseMinutes = 0;
-    int sunsetMinutes = 0;
-    bool valid = false;
-};
-
-// Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
-// [0, 1440) for extreme timezone/longitude combinations - normalize here so
-// callers only ever see well-formed minute-of-day values.
-SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
-    Dusk2Dawn location(cfg.lat, cfg.lon, cfg.utcOffsetMinutes / 60.0f);
-    int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
-    int sunset = location.sunset(year, month, day, /*isDST=*/false);
-
-    SunTimes result;
-    result.valid = (sunrise != -1) && (sunset != -1);
-    if (result.valid) {
-        result.sunriseMinutes = normalizeMinutes(sunrise);
-        result.sunsetMinutes = normalizeMinutes(sunset);
-    }
-    return result;
-}
-
 // Resolves a configured open/close schedule to a minute-of-day. Falls back
 // to the absolute-time value if sun-offset mode is selected but sunrise/
 // sunset could not be computed for this day (e.g. polar day/night).
@@ -81,6 +58,23 @@ bool inWindow(int nowMinutes, int targetMinutes) {
 }  // namespace
 
 namespace Scheduler {
+
+// Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
+// [0, 1440) for extreme timezone/longitude combinations - normalize here so
+// callers only ever see well-formed minute-of-day values.
+SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
+    Dusk2Dawn location(cfg.lat, cfg.lon, cfg.utcOffsetMinutes / 60.0f);
+    int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
+    int sunset = location.sunset(year, month, day, /*isDST=*/false);
+
+    SunTimes result;
+    result.valid = (sunrise != -1) && (sunset != -1);
+    if (result.valid) {
+        result.sunriseMinutes = normalizeMinutes(sunrise);
+        result.sunsetMinutes = normalizeMinutes(sunset);
+    }
+    return result;
+}
 
 void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorController& door) {
     if (!rtc.isTimeValid()) {

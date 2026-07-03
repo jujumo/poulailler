@@ -106,11 +106,13 @@ def build_index_html():
     html = html.replace("{{OPEN_ABS}}", minutes_to_hhmm(config["openAbsMinutes"]))
     html = html.replace("{{OPEN_SUN_CHECKED}}", " checked" if config["openMode"] == "sun" else "")
     html = html.replace("{{OPEN_SUN_OFF}}", str(config["openSunOffsetMinutes"]))
+    html = html.replace("{{SUNRISE}}", "N/A (mock doesn't compute solar times)")
 
     html = html.replace("{{CLOSE_ABS_CHECKED}}", " checked" if config["closeMode"] == "absolute" else "")
     html = html.replace("{{CLOSE_ABS}}", minutes_to_hhmm(config["closeAbsMinutes"]))
     html = html.replace("{{CLOSE_SUN_CHECKED}}", " checked" if config["closeMode"] == "sun" else "")
     html = html.replace("{{CLOSE_SUN_OFF}}", str(config["closeSunOffsetMinutes"]))
+    html = html.replace("{{SUNSET}}", "N/A (mock doesn't compute solar times)")
 
     html = html.replace("{{MOTOR_RUN_MS}}", str(config["motorRunMs"]))
 

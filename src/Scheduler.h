@@ -8,6 +8,17 @@
 // for the next event before going back to deep sleep.
 namespace Scheduler {
 
+struct SunTimes {
+    int sunriseMinutes = 0;
+    int sunsetMinutes = 0;
+    bool valid = false;
+};
+
+// Wraps the Dusk2Dawn library and normalizes its output into a well-formed
+// minute-of-day SunTimes; valid=false for polar day/night, where callers
+// must fall back to absolute-time config rather than use the output.
+SunTimes computeSunTimes(const Config& cfg, int year, int month, int day);
+
 // Call after waking from an RTC alarm or the fallback timer. No-op if the
 // RTC has no valid time yet (first boot, never configured).
 void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorController& door);
