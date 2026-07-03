@@ -20,7 +20,7 @@ alarm fires for the next scheduled action.
 | BTS7960 LPWM | GPIO25 | |
 | BTS7960 R_IS / L_IS | not connected | Current sensing is unused by design |
 
-Pin numbers live in `include/PinConfig.h` if you need to change them.
+Pin numbers live in `include/config.h` if you need to change them.
 
 Power: DS3231 and ESP32 logic from the battery's regulated 3.3/5V rail;
 BTS7960 motor supply from the battery directly. Add bulk capacitance
@@ -64,7 +64,7 @@ pio device monitor
 ## First boot / configuration
 
 1. Power on the board. It starts a WiFi access point: **SSID `CoopDoor-Setup`**,
-   password `coopdoor1234` (change it in `src/WebPortal.cpp` if you like).
+   password `coopdoor1234` (change it in `include/config.h` if you like).
 2. Connect a phone/laptop to that AP and browse to `http://192.168.4.1/`.
 3. Click **"Sync time from this device"** first — the DS3231 has no other
    time source, so accuracy depends entirely on your phone/laptop clock.

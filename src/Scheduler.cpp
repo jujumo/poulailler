@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 
-#include "PinConfig.h"
+#include "config.h"
 #include "TimeZone.h"
 
 namespace {

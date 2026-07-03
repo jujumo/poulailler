@@ -19,3 +19,7 @@
 #define PIN_MOTOR_RPWM 33
 #define PIN_MOTOR_LPWM 25
 // R_IS / L_IS (current sense) intentionally left unconnected - not used.
+
+// WiFi access point served for 5 minutes right after power-on/reset.
+#define WIFI_AP_SSID "CoopDoor-Setup"
+#define WIFI_AP_PASSWORD "coopdoor1234"  // WPA2, >=8 chars

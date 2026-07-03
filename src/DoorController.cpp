@@ -2,7 +2,7 @@
 
 #include <Arduino.h>
 
-#include "PinConfig.h"
+#include "config.h"
 
 DoorController::DoorController(ConfigStore& store) : store_(store) {}
 

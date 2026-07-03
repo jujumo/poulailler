@@ -6,11 +6,12 @@
 #include "TimeZone.h"
 #include "TimeZones.h"
 #include "WebPortalTemplate.h"
+#include "config.h"
 
 namespace {
 
-constexpr const char* kApSsid = "CoopDoor-Setup";
-constexpr const char* kApPassword = "coopdoor1234";  // WPA2, >=8 chars
+constexpr const char* kApSsid = WIFI_AP_SSID;
+constexpr const char* kApPassword = WIFI_AP_PASSWORD;
 
 // Parses "HH:MM" into minutes-since-midnight. Returns -1 on malformed input.
 int parseHhMmToMinutes(const String& value) {
