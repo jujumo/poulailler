@@ -14,9 +14,11 @@ enum class DoorState : uint8_t {
 };
 
 struct Config {
-    float lat = 0.0f;
-    float lon = 0.0f;
-    int16_t utcOffsetMinutes = 0;
+    // Defaults to Grenoble, France - just a reasonable starting point to
+    // edit in the config page, not tied to any real deployment.
+    float lat = 45.1885f;
+    float lon = 5.7245f;
+    int16_t utcOffsetMinutes = 60;
 
     ScheduleMode openMode = ScheduleMode::ABSOLUTE;
     uint16_t openAbsMinutes = 420;     // 07:00

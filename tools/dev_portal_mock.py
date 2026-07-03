@@ -29,9 +29,9 @@ TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "src" / "WebPortalTempl
 
 # Mirrors the Config struct / defaults in src/ConfigStore.h
 config = {
-    "lat": 0.0,
-    "lon": 0.0,
-    "utcOffsetMinutes": 0,
+    "lat": 45.1885,
+    "lon": 5.7245,
+    "utcOffsetMinutes": 60,
     "openMode": "absolute",       # "absolute" | "sun"
     "openAbsMinutes": 420,        # 07:00
     "openSunOffsetMinutes": 0,
