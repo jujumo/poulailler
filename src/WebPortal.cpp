@@ -31,28 +31,51 @@ String minutesToHhMm(int minutes) {
 bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
 
 // The next occurrence of sunrise/sunset (today's, unless it's already
-// passed, in which case tomorrow's) - mirrors the rollover idea in
-// Scheduler::armNextAlarmAndSleep, just for display rather than scheduling.
+// passed, in which case tomorrow's), converted to local time for display -
+// mirrors the UTC-space rollover in Scheduler::armNextAlarmAndSleep, since
+// computeSunTimes() is UTC-native.
 String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
     if (!rtc.isTimeValid()) return "unknown - sync time first";
 
-    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
+    DateTime now = rtc.now();  // UTC
     Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, now.year(), now.month(), now.day());
     int nowMinutes = now.hour() * 60 + now.minute();
-    int eventMinutes = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
+    int eventMinutesUtc = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
 
-    if (sun.valid && nowMinutes >= eventMinutes) {
+    if (sun.valid && nowMinutes >= eventMinutesUtc) {
         DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
         Scheduler::SunTimes sunTomorrow =
             Scheduler::computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
         if (sunTomorrow.valid) {
             sun = sunTomorrow;
-            eventMinutes = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
+            eventMinutesUtc = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
+            now = tomorrow;  // so the DateTime built below lands on the right day
         }
     }
 
     if (!sun.valid) return "N/A (polar day/night)";
-    return minutesToHhMm(eventMinutes);
+
+    DateTime eventUtc(now.year(), now.month(), now.day(), eventMinutesUtc / 60,
+                       eventMinutesUtc % 60, 0);
+    DateTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone).dt;
+    return minutesToHhMm(eventLocal.hour() * 60 + eventLocal.minute());
+}
+
+// The UTC time-of-day a configured LOCAL absolute open/close time currently
+// resolves to, for display next to its time picker. Recomputed fresh on
+// every page load using today's date (same as Scheduler), rather than
+// stored, so it always reflects today's DST status rather than a stale
+// snapshot from whenever it was last saved. This is inherently a snapshot
+// of "if saved today" though - the form has no JS to recompute it live as
+// you change the picker before saving.
+String localAbsToUtcHhMm(uint16_t localMinutes, RtcManager& rtc, const char* zoneName) {
+    if (!rtc.isTimeValid()) return "unknown - sync time first";
+
+    DateTime today = rtc.now();
+    DateTime localTarget(today.year(), today.month(), today.day(), localMinutes / 60,
+                          localMinutes % 60, 0);
+    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
+    return minutesToHhMm(utcTarget.hour() * 60 + utcTarget.minute());
 }
 
 // Formats a signed UTC offset like "+02:00", with " (DST)" appended when the
@@ -154,12 +177,14 @@ String WebPortal::buildIndexHtml() {
 
     html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
+    html.replace("{{OPEN_ABS_UTC}}", localAbsToUtcHhMm(cfg_.openAbsMinutes, rtc_, cfg_.timezone));
     html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
     html.replace("{{SUNRISE}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/true));
 
     html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
     html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
+    html.replace("{{CLOSE_ABS_UTC}}", localAbsToUtcHhMm(cfg_.closeAbsMinutes, rtc_, cfg_.timezone));
     html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
     html.replace("{{SUNSET}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/false));

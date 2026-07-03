@@ -17,10 +17,4 @@ struct LocalTime {
 LocalTime toLocal(const DateTime& utc, const char* zoneName);
 DateTime toUtc(const DateTime& localWallClock, const char* zoneName);
 
-// The UTC offset in effect at local noon on the given LOCAL calendar date -
-// for callers (Scheduler's solar math) that know a date but not yet a
-// specific instant. Local noon safely avoids ambiguity right at a DST
-// transition, which always happens overnight.
-int utcOffsetMinutesForLocalDate(int year, int month, int day, const char* zoneName);
-
 }  // namespace TimeZone

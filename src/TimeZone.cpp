@@ -47,22 +47,4 @@ DateTime toUtc(const DateTime& localWallClock, const char* zoneName) {
     return DateTime(static_cast<uint32_t>(epoch));
 }
 
-int utcOffsetMinutesForLocalDate(int year, int month, int day, const char* zoneName) {
-    applyZone(zoneName);
-    struct tm noon = {};
-    noon.tm_year = year - 1900;
-    noon.tm_mon = month - 1;
-    noon.tm_mday = day;
-    noon.tm_hour = 12;
-    noon.tm_isdst = -1;
-    time_t utcEquivalent = mktime(&noon);  // the UTC instant of local noon on this date/zone
-
-    // Same trick as toLocal(): reinterpret the same y/m/d 12:00 fields as if
-    // they were UTC, and diff against the real UTC instant just computed.
-    DateTime asIfUtc(year, month, day, 12, 0, 0);
-    long long offsetSeconds =
-        static_cast<long long>(asIfUtc.unixtime()) - static_cast<long long>(utcEquivalent);
-    return static_cast<int>(offsetSeconds / 60);
-}
-
 }  // namespace TimeZone

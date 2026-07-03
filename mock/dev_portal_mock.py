@@ -4,9 +4,11 @@ the page's HTML/CSS/JS and form validation without real hardware.
 
 It mirrors the same routes, field names, and validation ranges as the
 firmware's WebPortal so you can click through the exact UX in a browser.
-It does NOT run SunCalc, does NOT touch GPIO/NVS/RTC hardware, and resets
-its in-memory state whenever you restart it - it's for iterating on the
-page itself, not for testing scheduling/motor/deep-sleep logic.
+It does NOT touch GPIO/NVS/RTC hardware, and resets its in-memory state
+whenever you restart it - it's for iterating on the page itself, not for
+testing motor/deep-sleep logic. Sunrise/sunset IS computed (see
+SolarCalculator below), so the sun-offset schedule fields behave the same
+as on real hardware.
 
 The markup itself is loaded straight from src/WebPortalTemplate.h (the same
 file the firmware compiles in) and re-read on every request, so editing that
@@ -17,6 +19,7 @@ Usage:
     python3 mock/dev_portal_mock.py [port]   # default port 8080
 """
 
+import math
 import re
 import sys
 import time
@@ -86,6 +89,187 @@ def parse_hhmm_to_minutes(value):
     return hh * 60 + mm
 
 
+class SolarCalculator:
+    """Port of the NOAA solar calculator algorithm used by the firmware's
+    Dusk2Dawn library (.pio/libdeps/esp32dev/Dusk2Dawn/Dusk2Dawn.cpp), so the
+    mock's sun-offset fields behave like the real device instead of a stub.
+    Unlike that library, this doesn't truncate the UTC offset to whole
+    hours, so half-hour zones (e.g. Asia/Kolkata) are handled exactly here
+    even though the firmware loses the :30 - a known limitation of the
+    pinned library, not reproduced on purpose.
+    """
+
+    @staticmethod
+    def _jday(year, month, day):
+        if month <= 2:
+            year -= 1
+            month += 12
+        a = math.floor(year / 100)
+        b = 2 - a + math.floor(a / 4)
+        return math.floor(365.25 * (year + 4716)) + math.floor(30.6001 * (month + 1)) + day + b - 1524.5
+
+    @staticmethod
+    def _fraction_of_century(jd):
+        return (jd - 2451545) / 36525
+
+    @staticmethod
+    def _geom_mean_long_sun(t):
+        return (280.46646 + t * (36000.76983 + t * 0.0003032)) % 360
+
+    @staticmethod
+    def _geom_mean_anomaly_sun(t):
+        return 357.52911 + t * (35999.05029 - 0.0001537 * t)
+
+    @staticmethod
+    def _eccentricity_earth_orbit(t):
+        return 0.016708634 - t * (0.000042037 + 0.0000001267 * t)
+
+    @classmethod
+    def _sun_eq_of_center(cls, t):
+        m = cls._geom_mean_anomaly_sun(t)
+        mrad = math.radians(m)
+        sinm, sin2m, sin3m = math.sin(mrad), math.sin(mrad * 2), math.sin(mrad * 3)
+        return (sinm * (1.914602 - t * (0.004817 + 0.000014 * t))
+                + sin2m * (0.019993 - 0.000101 * t)
+                + sin3m * 0.000289)
+
+    @classmethod
+    def _sun_true_long(cls, t):
+        return cls._geom_mean_long_sun(t) + cls._sun_eq_of_center(t)
+
+    @classmethod
+    def _sun_apparent_long(cls, t):
+        o = cls._sun_true_long(t)
+        omega = 125.04 - 1934.136 * t
+        return o - 0.00569 - 0.00478 * math.sin(math.radians(omega))
+
+    @staticmethod
+    def _mean_obliquity_of_ecliptic(t):
+        seconds = 21.448 - t * (46.8150 + t * (0.00059 - t * 0.001813))
+        return 23 + (26 + (seconds / 60)) / 60
+
+    @classmethod
+    def _obliquity_correction(cls, t):
+        e0 = cls._mean_obliquity_of_ecliptic(t)
+        omega = 125.04 - 1934.136 * t
+        return e0 + 0.00256 * math.cos(math.radians(omega))
+
+    @classmethod
+    def _sun_declination(cls, t):
+        e = cls._obliquity_correction(t)
+        lam = cls._sun_apparent_long(t)
+        sint = math.sin(math.radians(e)) * math.sin(math.radians(lam))
+        return math.degrees(math.asin(sint))
+
+    @classmethod
+    def _equation_of_time(cls, t):
+        epsilon = cls._obliquity_correction(t)
+        l0 = cls._geom_mean_long_sun(t)
+        e = cls._eccentricity_earth_orbit(t)
+        m = cls._geom_mean_anomaly_sun(t)
+
+        y = math.tan(math.radians(epsilon) / 2)
+        y *= y
+
+        sin2l0 = math.sin(2 * math.radians(l0))
+        sinm = math.sin(math.radians(m))
+        cos2l0 = math.cos(2 * math.radians(l0))
+        sin4l0 = math.sin(4 * math.radians(l0))
+        sin2m = math.sin(2 * math.radians(m))
+
+        e_time = (y * sin2l0 - 2 * e * sinm + 4 * e * y * sinm * cos2l0
+                  - 0.5 * y * y * sin4l0 - 1.25 * e * e * sin2m)
+        return math.degrees(e_time) * 4  # minutes
+
+    @staticmethod
+    def _hour_angle_sunrise(lat, solar_dec):
+        lat_rad = math.radians(lat)
+        sd_rad = math.radians(solar_dec)
+        ha_arg = (math.cos(math.radians(90.833)) / (math.cos(lat_rad) * math.cos(sd_rad))
+                  - math.tan(lat_rad) * math.tan(sd_rad))
+        if not (-1.0 <= ha_arg <= 1.0):
+            return None  # no sunrise/sunset that day, e.g. polar day/night
+        return math.acos(ha_arg)
+
+    @classmethod
+    def _sunrise_set_utc(cls, is_rise, jday, lat, lon):
+        t = cls._fraction_of_century(jday)
+        eq_time = cls._equation_of_time(t)
+        solar_dec = cls._sun_declination(t)
+        hour_angle = cls._hour_angle_sunrise(lat, solar_dec)
+        if hour_angle is None:
+            return None
+        hour_angle = hour_angle if is_rise else -hour_angle
+        delta = lon + math.degrees(hour_angle)
+        return 720 - (4 * delta) - eq_time  # minutes
+
+    @classmethod
+    def _sunrise_set(cls, is_rise, year, month, day, lat, lon, timezone_hours):
+        jday = cls._jday(year, month, day)
+        time_utc = cls._sunrise_set_utc(is_rise, jday, lat, lon)
+        if time_utc is None:
+            return None
+        new_jday = jday + time_utc / (60 * 24)
+        new_time_utc = cls._sunrise_set_utc(is_rise, new_jday, lat, lon)
+        if new_time_utc is None:
+            return None
+        return round(new_time_utc + timezone_hours * 60) % 1440
+
+    @classmethod
+    def sun_times_minutes(cls, lat, lon, timezone_hours, year, month, day):
+        """Returns (sunrise_minutes, sunset_minutes); either is None for
+        polar day/night."""
+        sunrise = cls._sunrise_set(True, year, month, day, lat, lon, timezone_hours)
+        sunset = cls._sunrise_set(False, year, month, day, lat, lon, timezone_hours)
+        return sunrise, sunset
+
+
+def next_sun_event_hhmm(is_sunrise):
+    """Mirrors Scheduler.cpp/WebPortal.cpp: sun times are computed directly
+    in UTC (timezone_hours=0, sunrise/sunset is purely a function of
+    lat/lon/date), then only the final result is converted to local for
+    display. Today's occurrence, unless it's already passed, in which case
+    tomorrow's."""
+    if not rtc_state["valid"]:
+        return "unknown - sync time first"
+
+    def sun_times_utc_for(d):
+        return SolarCalculator.sun_times_minutes(config["lat"], config["lon"], 0, d.year, d.month, d.day)
+
+    utc_now = rtc_now_utc()
+    sunrise_min, sunset_min = sun_times_utc_for(utc_now)
+    event_min_utc = sunrise_min if is_sunrise else sunset_min
+    now_min = utc_now.hour * 60 + utc_now.minute
+
+    event_day = utc_now
+    if event_min_utc is not None and now_min >= event_min_utc:
+        event_day = utc_now + timedelta(days=1)
+        sunrise_min, sunset_min = sun_times_utc_for(event_day)
+        event_min_utc = sunrise_min if is_sunrise else sunset_min
+
+    if event_min_utc is None:
+        return "N/A (polar day/night)"
+
+    event_utc = event_day.replace(hour=event_min_utc // 60, minute=event_min_utc % 60, second=0,
+                                   microsecond=0)
+    event_local = event_utc.astimezone(ZoneInfo(config["timezone"]))
+    return minutes_to_hhmm(event_local.hour * 60 + event_local.minute)
+
+
+def local_abs_to_utc_hhmm(local_minutes):
+    """Mirrors WebPortal.cpp's localAbsToUtcHhMm(): the UTC time-of-day a
+    configured LOCAL absolute time currently resolves to, using today's
+    date, for display next to the time picker."""
+    if not rtc_state["valid"]:
+        return "unknown - sync time first"
+
+    today = rtc_now_utc().astimezone(ZoneInfo(config["timezone"]))
+    local_target = today.replace(hour=local_minutes // 60, minute=local_minutes % 60, second=0,
+                                  microsecond=0)
+    utc_target = local_target.astimezone(timezone.utc)
+    return minutes_to_hhmm(utc_target.hour * 60 + utc_target.minute)
+
+
 _TEMPLATE_RE = re.compile(r'kIndexPageTemplate\[\]\s*=\s*R"HTML\((.*)\)HTML"', re.DOTALL)
 
 
@@ -139,15 +323,17 @@ def build_index_html():
 
     html = html.replace("{{OPEN_ABS_CHECKED}}", " checked" if config["openMode"] == "absolute" else "")
     html = html.replace("{{OPEN_ABS}}", minutes_to_hhmm(config["openAbsMinutes"]))
+    html = html.replace("{{OPEN_ABS_UTC}}", local_abs_to_utc_hhmm(config["openAbsMinutes"]))
     html = html.replace("{{OPEN_SUN_CHECKED}}", " checked" if config["openMode"] == "sun" else "")
     html = html.replace("{{OPEN_SUN_OFF}}", str(config["openSunOffsetMinutes"]))
-    html = html.replace("{{SUNRISE}}", "N/A (mock doesn't compute solar times)")
+    html = html.replace("{{SUNRISE}}", next_sun_event_hhmm(is_sunrise=True))
 
     html = html.replace("{{CLOSE_ABS_CHECKED}}", " checked" if config["closeMode"] == "absolute" else "")
     html = html.replace("{{CLOSE_ABS}}", minutes_to_hhmm(config["closeAbsMinutes"]))
+    html = html.replace("{{CLOSE_ABS_UTC}}", local_abs_to_utc_hhmm(config["closeAbsMinutes"]))
     html = html.replace("{{CLOSE_SUN_CHECKED}}", " checked" if config["closeMode"] == "sun" else "")
     html = html.replace("{{CLOSE_SUN_OFF}}", str(config["closeSunOffsetMinutes"]))
-    html = html.replace("{{SUNSET}}", "N/A (mock doesn't compute solar times)")
+    html = html.replace("{{SUNSET}}", next_sun_event_hhmm(is_sunrise=False))
 
     html = html.replace("{{MOTOR_RUN_MS}}", str(config["motorRunMs"]))
 

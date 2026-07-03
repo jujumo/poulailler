@@ -29,15 +29,32 @@ int normalizeMinutes(int minutes) {
     return minutes;
 }
 
-// Resolves a configured open/close schedule to a minute-of-day. Falls back
-// to the absolute-time value if sun-offset mode is selected but sunrise/
-// sunset could not be computed for this day (e.g. polar day/night).
-int resolveMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
-                    int sunEventMinutes, bool sunValid) {
-    if (mode == ScheduleMode::ABSOLUTE || !sunValid) {
-        return absMinutes;
+// Converts a configured LOCAL absolute time-of-day (as entered in the web
+// UI) to the UTC minute-of-day it corresponds to on the given UTC calendar
+// day. Computed fresh on every call rather than cached/stored, so a DST
+// transition between now and the target is picked up automatically - no
+// manual re-save needed twice a year.
+int localAbsMinutesToUtc(uint16_t localMinutes, const DateTime& utcDay, const char* zoneName) {
+    DateTime localTarget(utcDay.year(), utcDay.month(), utcDay.day(), localMinutes / 60,
+                          localMinutes % 60, 0);
+    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
+    return utcTarget.hour() * 60 + utcTarget.minute();
+}
+
+// Resolves a configured open/close schedule to a UTC minute-of-day for the
+// given UTC calendar day. Sun-offset mode is already UTC-native (see
+// computeSunTimes()) so it needs no conversion; absolute mode is
+// user-entered local time and must be resolved per calendar day via
+// localAbsMinutesToUtc() above. Falls back to absolute if sun-offset mode
+// is selected but sunrise/sunset could not be computed (e.g. polar
+// day/night).
+int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
+                       int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
+                       const char* zoneName) {
+    if (mode == ScheduleMode::SUN_OFFSET && sunValid) {
+        return normalizeMinutes(sunEventUtcMinutes + sunOffsetMinutes);
     }
-    return normalizeMinutes(sunEventMinutes + sunOffsetMinutes);
+    return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
 }
 
 bool inWindow(int nowMinutes, int targetMinutes) {
@@ -63,17 +80,14 @@ namespace Scheduler {
 // Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
 // [0, 1440) for extreme timezone/longitude combinations - normalize here so
 // callers only ever see well-formed minute-of-day values.
+//
+// (year, month, day) is a UTC calendar date, and the result is UTC-native:
+// passing timezone=0/isDST=false makes Dusk2Dawn return its raw UTC minutes
+// (see Dusk2Dawn::sunriseSetUTC()) with no local/DST conversion at all -
+// sunrise/sunset is purely a function of lat/lon/date, so no timezone is
+// needed here once everything downstream works in UTC too.
 SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
-    // Dusk2Dawn's `timezone` ctor arg is a plain UTC offset; folding this
-    // date's DST-aware offset straight into it and always passing
-    // isDST=false is equivalent to (and simpler than) passing the *standard*
-    // offset separately with isDST=true, since Dusk2Dawn::sunriseSet() just
-    // adds the two together anyway. Note it truncates this to whole hours,
-    // so half-hour-offset zones (e.g. Asia/Kolkata) lose their :30 here -
-    // a limitation of the library, not of this offset calculation.
-    float timezoneHours =
-        TimeZone::utcOffsetMinutesForLocalDate(year, month, day, cfg.timezone) / 60.0f;
-    Dusk2Dawn location(cfg.lat, cfg.lon, timezoneHours);
+    Dusk2Dawn location(cfg.lat, cfg.lon, /*timezone=*/0.0f);
     int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
     int sunset = location.sunset(year, month, day, /*isDST=*/false);
 
@@ -93,18 +107,20 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
         return;
     }
 
-    // The DS3231 stores UTC; open/close times are configured in local wall
-    // clock, so resolve "now" to local before comparing against them.
-    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
+    // Everything here runs in UTC - the DS3231 already stores it, and
+    // resolveUtcMinutes() converts the (local) configured times into it
+    // rather than the other way around.
+    DateTime now = rtc.now();
     uint16_t today = daysSinceEpoch(now);
     int nowMinutes = now.hour() * 60 + now.minute();
 
     SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
 
-    int openMinutes = resolveMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                                      sun.sunriseMinutes, sun.valid);
-    int closeMinutes = resolveMinutes(cfg.closeMode, cfg.closeAbsMinutes, cfg.closeSunOffsetMinutes,
-                                       sun.sunsetMinutes, sun.valid);
+    int openMinutes = resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
+                                         sun.sunriseMinutes, sun.valid, now, cfg.timezone);
+    int closeMinutes = resolveUtcMinutes(cfg.closeMode, cfg.closeAbsMinutes,
+                                          cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
+                                          now, cfg.timezone);
 
     if (cfg.lastOpenDay != today && inWindow(nowMinutes, openMinutes)) {
         door.open(cfg);
@@ -124,21 +140,22 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         goToSleep(kInvalidTimeRetrySeconds, /*armExt0=*/false);
     }
 
-    // The DS3231 stores UTC; open/close times are configured in local wall
-    // clock, so resolve "now" to local before comparing against them.
-    DateTime now = TimeZone::toLocal(rtc.now(), cfg.timezone).dt;
+    // Everything here runs in UTC - see handleDueActions().
+    DateTime now = rtc.now();
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     uint16_t today = daysSinceEpoch(now);
 
     SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
     SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
 
-    int openTodayMin = resolveMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                                       sunToday.sunriseMinutes, sunToday.valid);
-    int closeTodayMin = resolveMinutes(cfg.closeMode, cfg.closeAbsMinutes, cfg.closeSunOffsetMinutes,
-                                        sunToday.sunsetMinutes, sunToday.valid);
-    int openTomorrowMin = resolveMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                                          sunTomorrow.sunriseMinutes, sunTomorrow.valid);
+    int openTodayMin = resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
+                                          sunToday.sunriseMinutes, sunToday.valid, now, cfg.timezone);
+    int closeTodayMin = resolveUtcMinutes(cfg.closeMode, cfg.closeAbsMinutes,
+                                           cfg.closeSunOffsetMinutes, sunToday.sunsetMinutes,
+                                           sunToday.valid, now, cfg.timezone);
+    int openTomorrowMin =
+        resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
+                           sunTomorrow.sunriseMinutes, sunTomorrow.valid, tomorrow, cfg.timezone);
 
     bool openPending = (cfg.lastOpenDay != today);
     bool closePending = (cfg.lastCloseDay != today);
@@ -146,13 +163,10 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
     // at the *next* occurrence of the given time-of-day, so a "today" value
     // that has already passed simply rolls over to tomorrow in hardware -
-    // no need to reason about which calendar day to arm for here. We do
-    // still need to know *which* calendar day the chosen local minute
-    // belongs to, though, since converting it to the UTC time-of-day the
-    // alarm actually runs on depends on whether that specific day is inside
-    // a DST period.
+    // no need to reason about which calendar day to arm for here. Each
+    // candidate above was already resolved to UTC for its own specific
+    // calendar day, so no further conversion is needed before arming.
     int nextMinute;
-    DateTime targetDay = now;
     if (openPending && closePending) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
     } else if (openPending) {
@@ -161,13 +175,11 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         nextMinute = closeTodayMin;
     } else {
         nextMinute = openTomorrowMin;
-        targetDay = tomorrow;
     }
 
-    DateTime targetLocal(targetDay.year(), targetDay.month(), targetDay.day(), nextMinute / 60,
-                          nextMinute % 60, 0);
-    DateTime targetUtc = TimeZone::toUtc(targetLocal, cfg.timezone);
-    rtc.setNextAlarm(targetUtc.hour(), targetUtc.minute(), targetUtc.second());
+    uint8_t hh = static_cast<uint8_t>(nextMinute / 60);
+    uint8_t mm = static_cast<uint8_t>(nextMinute % 60);
+    rtc.setNextAlarm(hh, mm, 0);
     rtc.clearAlarm();
 
     goToSleep(kFallbackSleepSeconds, /*armExt0=*/true);

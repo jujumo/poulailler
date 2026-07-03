@@ -40,9 +40,11 @@ python3 mock/dev_portal_mock.py       # serves http://127.0.0.1:8080/
 
 It mirrors the same routes, field names, and validation ranges as the real
 portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`), backed by
-an in-memory config that resets when you restart it. It does **not**
-compute sunrise/sunset, drive GPIO, or persist to NVS — it's purely for
-the page itself.
+an in-memory config that resets when you restart it. Sunrise/sunset is
+computed with a pure-Python port of the same NOAA algorithm `Dusk2Dawn`
+uses, so the sun-offset fields behave like the real device. It does
+**not** drive GPIO or persist to NVS, though — it's purely for the page
+itself.
 Its markup is loaded straight from `src/WebPortalTemplate.h` and re-read on
 every request, so editing that file and reloading the browser is enough —
 there's no separate copy to keep in sync.
@@ -69,7 +71,9 @@ pio device monitor
 4. Set latitude/longitude and pick your timezone from the list — DST is
    handled automatically for the zones in `src/TimeZones.h`.
 5. Choose open/close mode (fixed time, or offset from sunrise/sunset) and
-   save.
+   save. A fixed time is entered in local time; the page shows the UTC time
+   it currently resolves to next to it, since that's what's actually
+   compared against under the hood.
 6. Use **Force Open** / **Force Close** to verify the motor direction and
    confirm `motorRunMs` is long enough for a full travel (with margin — aim
    for ~15–20% more than the bare minimum, since motor speed sags as the
