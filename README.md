@@ -90,7 +90,7 @@ This project was written and built without physical hardware in the loop
 - `pio run` builds cleanly for `esp32dev` (already verified without
   hardware — this just compiles the firmware).
 - `pio test -e native` passes the `SunCalc` sunrise/sunset unit tests
-  (pure math, runs on your host, no hardware needed — already verified).
+  (pure math, runs on your host, no hardware needed).
 - Motor direction: does "Force Open" actually raise the door? Swap the
   `RPWM`/`LPWM` wiring or the logic in `DoorController::open()` if reversed.
 - Motor timing: does `motorRunMs` fully open/close the door without

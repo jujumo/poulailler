@@ -17,6 +17,8 @@ pio device monitor      # serial monitor (115200 baud)
 pio test -e native       # run SunCalc unit tests on the host (no hardware needed)
 ```
 
+`native` is test-only and has no `main()` of its own (`build_src_filter` in `platformio.ini` compiles only `SunCalc.cpp`) — a plain Build of it (`pio run -e native`, or VS Code's "Build" action on that environment) always fails to link with `undefined reference to 'main'`. That's expected, not a regression; always exercise it via `pio test -e native` instead.
+
 There is no hardware-in-the-loop test target — everything except `SunCalc` requires real ESP32/DS3231/BTS7960 hardware to exercise, and those checks are manual (see the "What to verify on real hardware" section of `README.md`).
 
 ## Architecture
