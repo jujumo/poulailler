@@ -1,10 +1,10 @@
 #include "Scheduler.h"
 
+#include <Dusk2Dawn.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
 
 #include "PinConfig.h"
-#include "SunCalc.h"
 
 namespace {
 
@@ -22,6 +22,35 @@ uint16_t daysSinceEpoch(const DateTime& dt) {
     return static_cast<uint16_t>(dt.unixtime() / 86400UL);
 }
 
+int normalizeMinutes(int minutes) {
+    minutes %= 1440;
+    if (minutes < 0) minutes += 1440;
+    return minutes;
+}
+
+struct SunTimes {
+    int sunriseMinutes = 0;
+    int sunsetMinutes = 0;
+    bool valid = false;
+};
+
+// Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
+// [0, 1440) for extreme timezone/longitude combinations - normalize here so
+// callers only ever see well-formed minute-of-day values.
+SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
+    Dusk2Dawn location(cfg.lat, cfg.lon, cfg.utcOffsetMinutes / 60.0f);
+    int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
+    int sunset = location.sunset(year, month, day, /*isDST=*/false);
+
+    SunTimes result;
+    result.valid = (sunrise != -1) && (sunset != -1);
+    if (result.valid) {
+        result.sunriseMinutes = normalizeMinutes(sunrise);
+        result.sunsetMinutes = normalizeMinutes(sunset);
+    }
+    return result;
+}
+
 // Resolves a configured open/close schedule to a minute-of-day. Falls back
 // to the absolute-time value if sun-offset mode is selected but sunrise/
 // sunset could not be computed for this day (e.g. polar day/night).
@@ -30,9 +59,7 @@ int resolveMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinu
     if (mode == ScheduleMode::ABSOLUTE || !sunValid) {
         return absMinutes;
     }
-    int minutes = (sunEventMinutes + sunOffsetMinutes) % 1440;
-    if (minutes < 0) minutes += 1440;
-    return minutes;
+    return normalizeMinutes(sunEventMinutes + sunOffsetMinutes);
 }
 
 bool inWindow(int nowMinutes, int targetMinutes) {
@@ -66,8 +93,7 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
     uint16_t today = daysSinceEpoch(now);
     int nowMinutes = now.hour() * 60 + now.minute();
 
-    SunTimes sun = calculateSunTimes(cfg.lat, cfg.lon, now.year(), now.month(), now.day(),
-                                      cfg.utcOffsetMinutes);
+    SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
 
     int openMinutes = resolveMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
                                       sun.sunriseMinutes, sun.valid);
@@ -96,10 +122,8 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     uint16_t today = daysSinceEpoch(now);
 
-    SunTimes sunToday = calculateSunTimes(cfg.lat, cfg.lon, now.year(), now.month(), now.day(),
-                                           cfg.utcOffsetMinutes);
-    SunTimes sunTomorrow = calculateSunTimes(cfg.lat, cfg.lon, tomorrow.year(), tomorrow.month(),
-                                              tomorrow.day(), cfg.utcOffsetMinutes);
+    SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
+    SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
 
     int openTodayMin = resolveMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
                                        sunToday.sunriseMinutes, sunToday.valid);

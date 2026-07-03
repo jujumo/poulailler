@@ -14,12 +14,9 @@ See `README.md` for wiring, flashing, and bring-up/configuration steps.
 pio run                 # build the esp32dev firmware
 pio run -t upload       # flash it
 pio device monitor      # serial monitor (115200 baud)
-pio test -e native       # run SunCalc unit tests on the host (no hardware needed)
 ```
 
-`native` is test-only and has no `main()` of its own (`build_src_filter` in `platformio.ini` compiles only `SunCalc.cpp`) — a plain Build of it (`pio run -e native`, or VS Code's "Build" action on that environment) always fails to link with `undefined reference to 'main'`. That's expected, not a regression; always exercise it via `pio test -e native` instead.
-
-There is no hardware-in-the-loop test target — everything except `SunCalc` requires real ESP32/DS3231/BTS7960 hardware to exercise, and those checks are manual (see the "What to verify on real hardware" section of `README.md`).
+There is no automated test target — sunrise/sunset math is delegated to the `Dusk2Dawn` library rather than hand-rolled, and everything else requires real ESP32/DS3231/BTS7960 hardware to exercise. Those checks are manual (see the "What to verify on real hardware" section of `README.md`).
 
 ## Architecture
 
@@ -31,7 +28,7 @@ There is no hardware-in-the-loop test target — everything except `SunCalc` req
 Modules (`src/`), each with a single responsibility:
 - `ConfigStore` — wraps `Preferences` (ESP32 NVS), namespace `doorcfg`. Owns the `Config` struct and its defaults; getters always pass an explicit default so a first-boot/corrupt-NVS namespace degrades safely rather than needing special-case handling elsewhere.
 - `RtcManager` — wraps `RTClib`'s `RTC_DS3231`. Always arms Alarm1 in "match hours/minutes/seconds, ignore date" mode (`DS3231_A1_Hour`), so the hardware itself resolves whether the next occurrence is today or tomorrow — callers never do date arithmetic for the alarm itself.
-- `SunCalc` — pure-math NOAA/Meeus sunrise/sunset calculation, deliberately dependency-free (no Arduino/hardware includes) so it can be unit-tested natively (`test/test_suncalc/`, `env:native` in `platformio.ini` uses `build_src_filter` to compile only `SunCalc.cpp` for that environment). Returns `valid=false` for polar day/night; callers must fall back to absolute-time config rather than use the output.
+- Sunrise/sunset is computed by the `Dusk2Dawn` library (a port of NOAA's solar calculator, added via `lib_deps`) rather than hand-rolled — see `computeSunTimes()` in `Scheduler.cpp`, which wraps it and normalizes its output into a `SunTimes{sunriseMinutes, sunsetMinutes, valid}` struct. `valid=false` for polar day/night (the library returns `-1`); callers must fall back to absolute-time config rather than use the output.
 - `DoorController` — the only module that touches the BTS7960 pins. Timed movement only — no limit switches, no current sensing (by design, not a gap). Writes `doorState = UNKNOWN` *before* moving and the real value only after, so a brownout mid-move is self-healing rather than leaving a false `OPEN`/`CLOSED` record. `force=true` (used by `WebPortal`) bypasses the normal idempotency check.
 - `Scheduler` — the scheduling brain. `handleDueActions()` resolves today's open/close minute-of-day (absolute or sun-offset) and triggers the door if due and not already done today. `armNextAlarmAndSleep()` picks the soonest of {today's remaining open, today's remaining close, tomorrow's open}, arms the DS3231 alarm, arms a 6-hour fallback timer wake as a safety net, and calls `esp_deep_sleep_start()`.
 - `WebPortal` — SoftAP + synchronous `WebServer`, serves one self-contained server-rendered HTML page (no JS framework, no CDN assets — nothing external is reachable anyway). Routes: `/` (page), `/save` (config form), `/settime` (browser-clock sync via a tiny inline JS snippet), `/force-open`, `/force-close`.

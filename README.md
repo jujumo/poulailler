@@ -40,8 +40,9 @@ python3 tools/dev_portal_mock.py       # serves http://127.0.0.1:8080/
 
 It mirrors the same routes, field names, and validation ranges as the real
 portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`), backed by
-an in-memory config that resets when you restart it. It does **not** run
-`SunCalc`, drive GPIO, or persist to NVS — it's purely for the page itself.
+an in-memory config that resets when you restart it. It does **not**
+compute sunrise/sunset, drive GPIO, or persist to NVS — it's purely for
+the page itself.
 If you change the markup in `WebPortal.cpp`, update
 `tools/dev_portal_mock.py`'s `build_index_html()` to match — it's a
 hand-ported mirror, not generated from the C++.
@@ -89,8 +90,10 @@ This project was written and built without physical hardware in the loop
 
 - `pio run` builds cleanly for `esp32dev` (already verified without
   hardware — this just compiles the firmware).
-- `pio test -e native` passes the `SunCalc` sunrise/sunset unit tests
-  (pure math, runs on your host, no hardware needed).
+- Sunrise/sunset times: `Dusk2Dawn` (added via `lib_deps`, see
+  `Scheduler::computeSunTimes()`) is a well-established port of NOAA's
+  solar calculator, but double-check a few open/close times computed for
+  your actual lat/lon against a known-good source before relying on it.
 - Motor direction: does "Force Open" actually raise the door? Swap the
   `RPWM`/`LPWM` wiring or the logic in `DoorController::open()` if reversed.
 - Motor timing: does `motorRunMs` fully open/close the door without
@@ -108,6 +111,9 @@ This project was written and built without physical hardware in the loop
 
 - **No limit switches / no current sensing** — door travel end is detected
   purely by a calibrated timed motor run.
+- **Sunrise/sunset** comes from the `Dusk2Dawn` library rather than a
+  hand-rolled implementation — it depends on `Arduino.h`, so it only
+  builds for `esp32dev`, not on a plain desktop.
 - **Config storage** is the ESP32's internal NVS (`Preferences`), namespace
   `doorcfg` — no external EEPROM.
 - **Scheduling** always arms DS3231 Alarm1 in "match hours/minutes/seconds,
