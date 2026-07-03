@@ -36,7 +36,7 @@ Modules (`src/`), each with a single responsibility:
 
 Config fields live in `ConfigStore.h`. Two fields worth knowing about before touching scheduling logic: `lastOpenDay`/`lastCloseDay` are separate (not a shared "last action date") because open and close both happen daily — collapsing them would let one action's completion incorrectly suppress the other. `timezone` is a zone *name* looked up in `TimeZones.h` (not a raw UTC offset) — see `TimeZone` above.
 
-`include/PinConfig.h` is the single source of truth for all GPIO assignments — check it before changing wiring-related code. `PIN_RTC_INT` (GPIO33) must stay on an RTC-capable, `ext0`-wakeup-eligible GPIO if it's ever reassigned.
+`include/PinConfig.h` is the single source of truth for all GPIO assignments — check it before changing wiring-related code. `PIN_RTC_INT` (GPIO15) must stay on an RTC-capable, `ext0`-wakeup-eligible GPIO if it's ever reassigned.
 
 ### The one correctness rule that matters most
 

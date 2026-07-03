@@ -13,11 +13,11 @@ alarm fires for the next scheduled action.
 |---|---|---|
 | DS3231 SDA | GPIO21 | |
 | DS3231 SCL | GPIO22 | |
-| DS3231 INT/SQW | GPIO33 | Needs a pull-up to 3.3V (most breakout boards already have one). Wakes the ESP32 from deep sleep. |
-| BTS7960 R_EN | GPIO25 | |
-| BTS7960 L_EN | GPIO26 | |
-| BTS7960 RPWM | GPIO27 | Driven digital HIGH/LOW (full speed, timed movement — no PWM needed) |
-| BTS7960 LPWM | GPIO14 | |
+| DS3231 INT/SQW | GPIO15 | Needs a pull-up to 3.3V (most breakout boards already have one). Wakes the ESP32 from deep sleep. |
+| BTS7960 R_EN | GPIO26 | |
+| BTS7960 L_EN | GPIO27 | |
+| BTS7960 RPWM | GPIO33 | Driven digital HIGH/LOW (full speed, timed movement — no PWM needed) |
+| BTS7960 LPWM | GPIO25 | |
 | BTS7960 R_IS / L_IS | not connected | Current sensing is unused by design |
 
 Pin numbers live in `include/PinConfig.h` if you need to change them.
@@ -106,7 +106,7 @@ This project was written and built without physical hardware in the loop
   at the scheduled time and not before? Measure sleep current with a
   multimeter/USB power meter to sanity-check battery life expectations.
 - DS3231 alarm interrupt wiring: confirm `INT/SQW` genuinely pulls the
-  ESP32 out of deep sleep (GPIO33, `ext0`, wake-on-LOW) — a missing pull-up
+  ESP32 out of deep sleep (GPIO15, `ext0`, wake-on-LOW) — a missing pull-up
   or wrong pin can silently break this and leave you dependent on the
   6-hour fallback timer only.
 
