@@ -46,6 +46,11 @@ If you change the markup in `WebPortal.cpp`, update
 `tools/dev_portal_mock.py`'s `build_index_html()` to match — it's a
 hand-ported mirror, not generated from the C++.
 
+Smoke-tested end to end (already verified): `GET /` renders the form,
+`POST /save` persists valid input and rejects invalid input (e.g. an
+out-of-range latitude) with a 400 instead of partially saving, and
+`POST /force-open` / `/force-close` update the displayed door state.
+
 ## Building and flashing
 
 ```
