@@ -25,6 +25,8 @@ void DoorController::close(Config& cfg, bool force) {
 
 void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool force) {
     if (!force && cfg.doorState == target) {
+        TRACE(target == DoorState::OPEN ? "[Door] already open, skipping"
+                                         : "[Door] already closed, skipping");
         return;  // already there - idempotent unless explicitly forced
     }
 
