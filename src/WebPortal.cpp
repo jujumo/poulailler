@@ -274,7 +274,10 @@ String WebPortal::buildIndexHtml() {
     return html;
 }
 
-void WebPortal::handleRoot() { server_.send(200, "text/html", buildIndexHtml()); }
+void WebPortal::handleRoot() {
+    TRACE("[WebPortal] serving index page");
+    server_.send(200, "text/html", buildIndexHtml());
+}
 
 void WebPortal::handleSaveConfig() {
     Config next = cfg_;
