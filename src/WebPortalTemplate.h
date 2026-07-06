@@ -40,14 +40,14 @@ button{padding:.6em 1em;margin-top:.5em}
 <label><input type='radio' name='openMode' value='absolute'{{OPEN_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='openAbs' value='{{OPEN_ABS}}'>
 <label><input type='radio' name='openMode' value='sun'{{OPEN_SUN_CHECKED}}> Relative to sunrise (minutes offset, +/-)</label>
-<input type='number' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
+<input type='text' inputmode='decimal' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
 <p>Door will open at {{OPEN_UTC}} UTC, hence {{OPEN_LOCAL}} local time.</p>
 </fieldset>
 <fieldset><legend>Door closes</legend>
 <label><input type='radio' name='closeMode' value='absolute'{{CLOSE_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='closeAbs' value='{{CLOSE_ABS}}'>
 <label><input type='radio' name='closeMode' value='sun'{{CLOSE_SUN_CHECKED}}> Relative to sunset (minutes offset, +/-)</label>
-<input type='number' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
+<input type='text' inputmode='decimal' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
 <p>Door will close at {{CLOSE_UTC}} UTC, hence {{CLOSE_LOCAL}} local time.</p>
 </fieldset>
 <fieldset><legend>Motor</legend>
