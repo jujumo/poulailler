@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 
+#include "Debug.h"
 #include "config.h"  // must come before Arduino.h to override LED_BUILTIN
 #include "TimeZone.h"
 
@@ -125,6 +126,9 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
                                           cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
                                           now, cfg.timezone);
 
+    TRACEF("[Scheduler] now=%d open=%d close=%d lastOpenDay=%u lastCloseDay=%u today=%u", nowMinutes,
+           openMinutes, closeMinutes, cfg.lastOpenDay, cfg.lastCloseDay, today);
+
     if (cfg.lastOpenDay != today && inWindow(nowMinutes, openMinutes)) {
         door.open(cfg);
         cfg.lastOpenDay = today;
@@ -189,6 +193,26 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
 
     uint8_t hh = static_cast<uint8_t>(nextMinute / 60);
     uint8_t mm = static_cast<uint8_t>(nextMinute % 60);
+
+#ifdef DEBUG_TRACES
+    // Runs on every boot right before going back to sleep, so this doubles
+    // as the "what does the device think right now, and when will it next
+    // wake up" boot trace.
+    DateTime nextEventDay = (openDueToday || closeDueToday) ? now : tomorrow;
+    DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(), hh, mm, 0);
+    TimeZone::LocalTime nowLocal = TimeZone::toLocal(now, cfg.timezone);
+    TimeZone::LocalTime nextEventLocal = TimeZone::toLocal(nextEventUtc, cfg.timezone);
+    TRACEF("[Scheduler] RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / %04d-%02d-%02d %02d:%02d:%02d local",
+           now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(),
+           nowLocal.dt.year(), nowLocal.dt.month(), nowLocal.dt.day(), nowLocal.dt.hour(),
+           nowLocal.dt.minute(), nowLocal.dt.second());
+    TRACEF("[Scheduler] next wake: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 local "
+           "(openDueToday=%d closeDueToday=%d)",
+           nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), hh, mm,
+           nextEventLocal.dt.year(), nextEventLocal.dt.month(), nextEventLocal.dt.day(),
+           nextEventLocal.dt.hour(), nextEventLocal.dt.minute(), openDueToday, closeDueToday);
+#endif
+
     rtc.setNextAlarm(hh, mm, 0);
     rtc.clearAlarm();
 
