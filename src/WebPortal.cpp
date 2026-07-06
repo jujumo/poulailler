@@ -302,6 +302,18 @@ void WebPortal::handleSaveConfig() {
     Config next = cfg_;
     bool ok = true;
 
+#ifdef DEBUG_TRACES
+    // Raw form fields as received, before any parsing/validation - so a
+    // save that silently does nothing can be told apart from "the request
+    // never reached this handler" vs. "it arrived but got rejected below".
+    TRACEF("[WebPortal] POST /save: openMode=%s openAbs=%s openSunOff=%s closeMode=%s closeAbs=%s "
+           "closeSunOff=%s motorRunMs=%s",
+           server_.arg("openMode").c_str(), server_.arg("openAbs").c_str(),
+           server_.arg("openSunOff").c_str(), server_.arg("closeMode").c_str(),
+           server_.arg("closeAbs").c_str(), server_.arg("closeSunOff").c_str(),
+           server_.arg("motorRunMs").c_str());
+#endif
+
     if (server_.hasArg("lat")) {
         float v = server_.arg("lat").toFloat();
         if (inRange(v, -90.0f, 90.0f)) next.lat = v; else ok = false;
@@ -351,6 +363,7 @@ void WebPortal::handleSaveConfig() {
     }
 
     if (!ok) {
+        TRACE("[WebPortal] POST /save: rejected as invalid, nothing saved");
         server_.send(400, "text/plain", "Invalid input - nothing was saved. Go back and check the values.");
         return;
     }
