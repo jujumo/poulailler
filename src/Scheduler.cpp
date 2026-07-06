@@ -147,6 +147,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     DateTime now = rtc.now();
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     uint16_t today = daysSinceEpoch(now);
+    int nowMinutes = now.hour() * 60 + now.minute();
 
     SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
     SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
@@ -165,16 +166,22 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
 
     // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
     // at the *next* occurrence of the given time-of-day, so a "today" value
-    // that has already passed simply rolls over to tomorrow in hardware -
-    // no need to reason about which calendar day to arm for here. Each
-    // candidate above was already resolved to UTC for its own specific
-    // calendar day, so no further conversion is needed before arming.
+    // that has already passed simply rolls over to tomorrow in hardware.
+    // That means a pending event whose today's time-of-day is already
+    // behind us can't be armed as "today" - doing so would make the DS3231
+    // roll it to tomorrow and skip straight past a still-upcoming event
+    // later today (e.g. reconfiguring at noon with an 08:00 open, not yet
+    // run, and an 18:00 close still ahead: naively arming the earlier
+    // clock-time of the two, 08:00, would silently swallow today's close).
+    bool openDueToday = openPending && nowMinutes <= openTodayMin + kToleranceAfterMin;
+    bool closeDueToday = closePending && nowMinutes <= closeTodayMin + kToleranceAfterMin;
+
     int nextMinute;
-    if (openPending && closePending) {
+    if (openDueToday && closeDueToday) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
-    } else if (openPending) {
+    } else if (openDueToday) {
         nextMinute = openTodayMin;
-    } else if (closePending) {
+    } else if (closeDueToday) {
         nextMinute = closeTodayMin;
     } else {
         nextMinute = openTomorrowMin;
