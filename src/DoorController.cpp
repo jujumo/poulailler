@@ -40,9 +40,23 @@ void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool forc
     digitalWrite(PIN_MOTOR_RPWM, rpwmHigh ? HIGH : LOW);
     digitalWrite(PIN_MOTOR_LPWM, rpwmHigh ? LOW : HIGH);
 
-    delay(cfg.motorRunMs);
+    // Blink the status LED at 2Hz (250ms half-period) for the duration of
+    // the move instead of a single blocking delay, so "door moving" is
+    // visible without pulling in a timer/thread.
+    constexpr unsigned long kBlinkHalfPeriodMs = 250;
+    bool ledOn = true;
+    for (unsigned long remaining = cfg.motorRunMs; remaining > 0;) {
+        unsigned long step = remaining < kBlinkHalfPeriodMs ? remaining : kBlinkHalfPeriodMs;
+        delay(step);
+        remaining -= step;
+        ledOn = !ledOn;
+        digitalWrite(PIN_STATUS_LED, ledOn ? HIGH : LOW);
+    }
 
     stopMotor();
+
+    // Movement done but device is still awake - back to solid on.
+    digitalWrite(PIN_STATUS_LED, HIGH);
 
     cfg.doorState = target;
     store_.save(cfg);
