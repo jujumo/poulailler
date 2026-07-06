@@ -126,15 +126,26 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
                                           cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
                                           now, cfg.timezone);
 
-    TRACEF("[Scheduler] now=%d open=%d close=%d lastOpenDay=%u lastCloseDay=%u today=%u", nowMinutes,
-           openMinutes, closeMinutes, cfg.lastOpenDay, cfg.lastCloseDay, today);
+    // "done" = today's action already ran (lastOpenDay/lastCloseDay is the
+    // only idempotency here, see DoorController's comment on why it's not
+    // also gated on door state); "due" = done is false AND now falls in the
+    // trigger window, i.e. this is the condition that actually fires it.
+    bool openDone = cfg.lastOpenDay == today;
+    bool closeDone = cfg.lastCloseDay == today;
+    bool openDue = !openDone && inWindow(nowMinutes, openMinutes);
+    bool closeDue = !closeDone && inWindow(nowMinutes, closeMinutes);
 
-    if (cfg.lastOpenDay != today && inWindow(nowMinutes, openMinutes)) {
+    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC done=%d due=%d | "
+           "close=%02d:%02d UTC done=%d due=%d",
+           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDone, openDue,
+           closeMinutes / 60, closeMinutes % 60, closeDone, closeDue);
+
+    if (openDue) {
         door.open(cfg);
         cfg.lastOpenDay = today;
         store.save(cfg);
     }
-    if (cfg.lastCloseDay != today && inWindow(nowMinutes, closeMinutes)) {
+    if (closeDue) {
         door.close(cfg);
         cfg.lastCloseDay = today;
         store.save(cfg);
