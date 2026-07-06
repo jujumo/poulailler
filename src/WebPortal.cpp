@@ -15,6 +15,11 @@ constexpr const char* kApSsid = WIFI_AP_SSID;
 constexpr const char* kApPassword = WIFI_AP_PASSWORD;
 const IPAddress kApIp(192, 168, 4, 1);
 
+// How often WebPortal::run()'s loop re-checks whether an open/close is due
+// while the portal is open - see the call site for why this needs to
+// happen at all.
+constexpr unsigned long kScheduleCheckIntervalMs = 5000;
+
 // Parses "HH:MM" into minutes-since-midnight. Returns -1 on malformed input.
 int parseHhMmToMinutes(const String& value) {
     int colon = value.indexOf(':');
@@ -184,10 +189,24 @@ void WebPortal::run(unsigned long durationMs) {
     server_.begin();
 
     unsigned long start = millis();
+    unsigned long lastScheduleCheck = start;
     while (millis() - start < durationMs) {
         dnsServer_.processNextRequest();
         if (httpsStub_.hasClient()) httpsStub_.accept().stop();
         server_.handleClient();
+
+        // The portal only ever opens after a true reset, so without this an
+        // open/close due to fire *during* this 5-minute window (e.g. a
+        // schedule saved moments ago for a few minutes out, or a reset that
+        // happens to land right on a due time) would be silently skipped
+        // until tomorrow - handleDueActions() otherwise only ever runs on
+        // the DS3231-alarm wake path. Throttled since it does RTC/I2C reads
+        // and sun-time math that don't need sub-second freshness.
+        if (millis() - lastScheduleCheck >= kScheduleCheckIntervalMs) {
+            lastScheduleCheck = millis();
+            Scheduler::handleDueActions(cfg_, rtc_, store_, door_);
+        }
+
         delay(2);
     }
 
