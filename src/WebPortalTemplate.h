@@ -17,24 +17,24 @@ button{padding:.6em 1em;margin-top:.5em}
 <h2>Coop Door Setup</h2>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
 {{STATUS_BLOCK}}
+<form method='POST' action='/save'>
 <fieldset><legend>Current RTC time</legend>
 {{NOW_SUFFIX}}
-<p>UTC time: {{UTC_TIME}}</p>
 <p>Local time: {{LOCAL_TIME}}</p>
-<p>UTC offset: {{UTC_OFFSET}}</p>
-<p>Timezone: {{TIMEZONE_NAME}}</p>
-<p>Next sunrise: {{SUNRISE}}</p>
-<p>Next sunset: {{SUNSET}}</p>
+<label>Timezone<select name='timezone'>{{TIMEZONE_OPTIONS}}</select></label>
+<p>UTC time: {{UTC_TIME}}</p>
+<p>Next sunrise (local): {{SUNRISE}}</p>
+<p>Next sunrise (UTC): {{SUNRISE_UTC}}</p>
+<p>Next sunset (local): {{SUNSET}}</p>
+<p>Next sunset (UTC): {{SUNSET_UTC}}</p>
 <form method='POST' action='/settime' onsubmit='return fillTime(this)'>
 <input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
 <input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>
 <button type='submit'>Sync time from this device</button></form>
 </fieldset>
-<form method='POST' action='/save'>
 <fieldset><legend>Location</legend>
 <label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='{{LAT}}'></label>
 <label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' value='{{LON}}'></label>
-<label>Timezone<select name='timezone'>{{TIMEZONE_OPTIONS}}</select></label>
 </fieldset>
 <fieldset><legend>Door opens</legend>
 <label><input type='radio' name='openMode' value='absolute'{{OPEN_ABS_CHECKED}}> At a fixed time</label>

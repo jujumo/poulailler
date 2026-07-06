@@ -32,12 +32,19 @@ String minutesToHhMm(int minutes) {
 
 bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
 
+struct SunEvent {
+    String local;
+    String utc;
+};
+
 // The next occurrence of sunrise/sunset (today's, unless it's already
-// passed, in which case tomorrow's), converted to local time for display -
+// passed, in which case tomorrow's), in both local and UTC time -
 // mirrors the UTC-space rollover in Scheduler::armNextAlarmAndSleep, since
 // computeSunTimes() is UTC-native.
-String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
-    if (!rtc.isTimeValid()) return "unknown - sync time first";
+SunEvent nextSunEvent(const Config& cfg, RtcManager& rtc, bool sunrise) {
+    SunEvent result = {"unknown - sync time first", "unknown - sync time first"};
+    
+    if (!rtc.isTimeValid()) return result;
 
     DateTime now = rtc.now();  // UTC
     Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, now.year(), now.month(), now.day());
@@ -55,12 +62,18 @@ String nextSunEventHhMm(const Config& cfg, RtcManager& rtc, bool sunrise) {
         }
     }
 
-    if (!sun.valid) return "N/A (polar day/night)";
+    if (!sun.valid) {
+        result.local = "N/A (polar day/night)";
+        result.utc = "N/A (polar day/night)";
+        return result;
+    }
 
     DateTime eventUtc(now.year(), now.month(), now.day(), eventMinutesUtc / 60,
                        eventMinutesUtc % 60, 0);
     DateTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone).dt;
-    return minutesToHhMm(eventLocal.hour() * 60 + eventLocal.minute());
+    result.utc = minutesToHhMm(eventMinutesUtc);
+    result.local = minutesToHhMm(eventLocal.hour() * 60 + eventLocal.minute());
+    return result;
 }
 
 struct ResolvedSchedule {
@@ -142,7 +155,7 @@ void WebPortal::run(unsigned long durationMs) {
     // only does that inside softAPConfig(), and only when its dns argument
     // is non-zero) - without this, clients get no DNS server at all and
     // can't resolve anything, so they never even reach dnsServer_ below.
-    WiFi.softAPConfig(kApIp, kApIp, IPAddress(255, 255, 255, 0), IPAddress(0, 0, 0, 0), kApIp);
+    WiFi.softAPConfig(kApIp, kApIp, IPAddress(255, 255, 255, 0));
 
     // Answer every DNS query with our own IP so phones/laptops' captive-
     // portal detection (which resolves a real hostname, e.g.
@@ -217,7 +230,6 @@ String WebPortal::buildIndexHtml() {
 
     html.replace("{{UTC_TIME}}", utcBuf);
     html.replace("{{LOCAL_TIME}}", localBuf);
-    html.replace("{{UTC_OFFSET}}", formatUtcOffset(local.utcOffsetMinutes, local.isDst));
     html.replace("{{TIMEZONE_NAME}}", cfg_.timezone);
     html.replace("{{NOW_SUFFIX}}",
                  rtc_.isTimeValid() ? "" : "<p class='msg'>RTC not set - please sync below.</p>");
@@ -230,7 +242,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
     html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
-    html.replace("{{SUNRISE}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/true));
+    SunEvent sunrise = nextSunEvent(cfg_, rtc_, /*sunrise=*/true);
+    html.replace("{{SUNRISE}}", sunrise.local);
+    html.replace("{{SUNRISE_UTC}}", sunrise.utc);
     ResolvedSchedule openResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
     html.replace("{{OPEN_UTC}}", openResolved.utc);
     html.replace("{{OPEN_LOCAL}}", openResolved.local);
@@ -239,7 +253,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
     html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
-    html.replace("{{SUNSET}}", nextSunEventHhMm(cfg_, rtc_, /*sunrise=*/false));
+    SunEvent sunset = nextSunEvent(cfg_, rtc_, /*sunrise=*/false);
+    html.replace("{{SUNSET}}", sunset.local);
+    html.replace("{{SUNSET_UTC}}", sunset.utc);
     ResolvedSchedule closeResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
     html.replace("{{CLOSE_UTC}}", closeResolved.utc);
     html.replace("{{CLOSE_LOCAL}}", closeResolved.local);
