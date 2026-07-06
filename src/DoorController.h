@@ -7,10 +7,9 @@
 // current sensing (R_IS/L_IS left unconnected).
 //
 // Always moves the motor when asked - it has no notion of "already there"
-// to skip against. That decision belongs entirely to the caller: Scheduler
-// only calls open()/close() when lastOpenDay/lastCloseDay says today's
-// action hasn't happened yet, and the web portal's Force Open/Close
-// buttons call it unconditionally on purpose. cfg.lastEventAction/
+// to skip against, and neither does Scheduler (see handleDueActions()):
+// whether to call open()/close() at all is purely "is now in today's
+// window", with no memory of whether it already ran. cfg.lastEventAction/
 // lastEventUnixTime is updated after a move completes purely as a
 // display-only history record, never consulted to decide whether to move.
 class DoorController {

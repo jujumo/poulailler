@@ -20,10 +20,6 @@ constexpr uint64_t kFallbackSleepSeconds = 6ULL * 3600ULL;
 // RTC has no valid time yet - retry soon, but don't busy-loop.
 constexpr uint64_t kInvalidTimeRetrySeconds = 600ULL;
 
-uint16_t daysSinceEpoch(const DateTime& dt) {
-    return static_cast<uint16_t>(dt.unixtime() / 86400UL);
-}
-
 int normalizeMinutes(int minutes) {
     minutes %= 1440;
     if (minutes < 0) minutes += 1440;
@@ -104,7 +100,7 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
     return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
 }
 
-void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorController& door) {
+void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
     if (!rtc.isTimeValid()) {
         // No valid time (never configured / lost power) - don't act on
         // garbage time. armNextAlarmAndSleep() will handle the short retry.
@@ -115,7 +111,6 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
     // resolveUtcMinutes() converts the (local) configured times into it
     // rather than the other way around.
     DateTime now = rtc.now();
-    uint16_t today = daysSinceEpoch(now);
     int nowMinutes = now.hour() * 60 + now.minute();
 
     SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
@@ -126,30 +121,22 @@ void handleDueActions(Config& cfg, RtcManager& rtc, ConfigStore& store, DoorCont
                                           cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
                                           now, cfg.timezone);
 
-    // "done" = today's action already ran (lastOpenDay/lastCloseDay is the
-    // only idempotency here, see DoorController's comment on why it's not
-    // also gated on door state); "due" = done is false AND now falls in the
-    // trigger window, i.e. this is the condition that actually fires it.
-    bool openDone = cfg.lastOpenDay == today;
-    bool closeDone = cfg.lastCloseDay == today;
-    bool openDue = !openDone && inWindow(nowMinutes, openMinutes);
-    bool closeDue = !closeDone && inWindow(nowMinutes, closeMinutes);
+    // No "already done today" memory at all - purely "is now in the
+    // trigger window". DoorController itself has no gate either (see its
+    // comment), so this is the only thing standing between "it's time" and
+    // the motor running. That means a wake that lands twice in the same
+    // window (e.g. the portal's periodic re-check below, or an overlapping
+    // fallback-timer wake) re-triggers the move each time - deliberate,
+    // per the request to drop the day-based bookkeeping entirely.
+    bool openDue = inWindow(nowMinutes, openMinutes);
+    bool closeDue = inWindow(nowMinutes, closeMinutes);
 
-    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC done=%d due=%d | "
-           "close=%02d:%02d UTC done=%d due=%d",
-           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDone, openDue,
-           closeMinutes / 60, closeMinutes % 60, closeDone, closeDue);
+    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC due=%d | close=%02d:%02d UTC due=%d",
+           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDue,
+           closeMinutes / 60, closeMinutes % 60, closeDue);
 
-    if (openDue) {
-        door.open(cfg);
-        cfg.lastOpenDay = today;
-        store.save(cfg);
-    }
-    if (closeDue) {
-        door.close(cfg);
-        cfg.lastCloseDay = today;
-        store.save(cfg);
-    }
+    if (openDue) door.open(cfg);
+    if (closeDue) door.close(cfg);
 }
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
@@ -161,7 +148,6 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // Everything here runs in UTC - see handleDueActions().
     DateTime now = rtc.now();
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
-    uint16_t today = daysSinceEpoch(now);
     int nowMinutes = now.hour() * 60 + now.minute();
 
     SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
@@ -176,27 +162,25 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
                            sunTomorrow.sunriseMinutes, sunTomorrow.valid, tomorrow, cfg.timezone);
 
-    bool openPending = (cfg.lastOpenDay != today);
-    bool closePending = (cfg.lastCloseDay != today);
-
     // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
     // at the *next* occurrence of the given time-of-day, so a "today" value
     // that has already passed simply rolls over to tomorrow in hardware.
-    // That means a pending event whose today's time-of-day is already
-    // behind us can't be armed as "today" - doing so would make the DS3231
-    // roll it to tomorrow and skip straight past a still-upcoming event
-    // later today (e.g. reconfiguring at noon with an 08:00 open, not yet
-    // run, and an 18:00 close still ahead: naively arming the earlier
-    // clock-time of the two, 08:00, would silently swallow today's close).
-    bool openDueToday = openPending && nowMinutes <= openTodayMin + kToleranceAfterMin;
-    bool closeDueToday = closePending && nowMinutes <= closeTodayMin + kToleranceAfterMin;
+    // That means a today's time-of-day already behind us can't be armed as
+    // "today" - doing so would make the DS3231 roll it to tomorrow and skip
+    // straight past a still-upcoming event later today (e.g. an 08:00 open
+    // already past and an 18:00 close still ahead: naively arming the
+    // earlier clock-time of the two, 08:00, would silently swallow today's
+    // close). This is independent of whether either has already fired -
+    // handleDueActions() has no memory of that, and neither does this.
+    bool openUpcoming = nowMinutes <= openTodayMin + kToleranceAfterMin;
+    bool closeUpcoming = nowMinutes <= closeTodayMin + kToleranceAfterMin;
 
     int nextMinute;
-    if (openDueToday && closeDueToday) {
+    if (openUpcoming && closeUpcoming) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
-    } else if (openDueToday) {
+    } else if (openUpcoming) {
         nextMinute = openTodayMin;
-    } else if (closeDueToday) {
+    } else if (closeUpcoming) {
         nextMinute = closeTodayMin;
     } else {
         nextMinute = openTomorrowMin;
@@ -209,7 +193,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // Runs on every boot right before going back to sleep, so this doubles
     // as the "what does the device think right now, and when will it next
     // wake up" boot trace.
-    DateTime nextEventDay = (openDueToday || closeDueToday) ? now : tomorrow;
+    DateTime nextEventDay = (openUpcoming || closeUpcoming) ? now : tomorrow;
     DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(), hh, mm, 0);
     TimeZone::LocalTime nowLocal = TimeZone::toLocal(now, cfg.timezone);
     TimeZone::LocalTime nextEventLocal = TimeZone::toLocal(nextEventUtc, cfg.timezone);
@@ -218,10 +202,10 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
            nowLocal.dt.year(), nowLocal.dt.month(), nowLocal.dt.day(), nowLocal.dt.hour(),
            nowLocal.dt.minute(), nowLocal.dt.second());
     TRACEF("[Scheduler] next wake: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 local "
-           "(openDueToday=%d closeDueToday=%d)",
+           "(openUpcoming=%d closeUpcoming=%d)",
            nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), hh, mm,
            nextEventLocal.dt.year(), nextEventLocal.dt.month(), nextEventLocal.dt.day(),
-           nextEventLocal.dt.hour(), nextEventLocal.dt.minute(), openDueToday, closeDueToday);
+           nextEventLocal.dt.hour(), nextEventLocal.dt.minute(), openUpcoming, closeUpcoming);
 #endif
 
     rtc.setNextAlarm(hh, mm, 0);

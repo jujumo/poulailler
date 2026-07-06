@@ -104,7 +104,11 @@ alarm rather than a fresh power-on), it computes the next due action, arms
 the DS3231 alarm for it, and goes into deep sleep. The page also keeps
 re-checking the schedule every few seconds while it's open, so a schedule
 you just saved for a few minutes from now can fire and move the door live,
-without waiting for the portal to close.
+without waiting for the portal to close. There's no "already done today"
+tracking anywhere, so if you leave the portal open past your scheduled
+time it'll keep re-triggering the same move every few seconds for as long
+as you're inside that window — by design (see Design notes below), not a
+bug.
 
 ## Debug tracing
 
@@ -148,12 +152,16 @@ This project was written and built without physical hardware in the loop
 
 - **No limit switches / no current sensing** — door travel end is detected
   purely by a calibrated timed motor run.
-- **The door's last-known state is display-only** — `DoorController` always
-  moves when told to; only `lastOpenDay`/`lastCloseDay` (has today's action
-  already run?) decides whether the schedule calls it at all. An earlier
-  design used the door's last state as an extra gate, which silently
-  no-op'd a due schedule whenever that state already happened to match the
-  target (e.g. right after an unrelated force-test) with no visible effect.
+- **No idempotency, anywhere, on purpose** — `DoorController` always moves
+  when told to, and `Scheduler` calls it purely on "is now inside today's
+  open/close window", with no "already done today" memory at all. Two
+  earlier designs added gates here (the door's last-known state, then a
+  once-per-day latch) and both caused a due schedule to silently do
+  nothing with no visible effect; both were removed by request in favor of
+  "it's time, so do it" every time it's evaluated. The flip side: a wake
+  (or the config portal's periodic re-check, see below) landing more than
+  once inside the same ~12-minute window **will** move the motor again
+  each time.
 - **Sunrise/sunset** comes from the `Dusk2Dawn` library rather than a
   hand-rolled implementation — it depends on `Arduino.h`, so it only
   builds for `esp32dev`, not on a plain desktop.

@@ -8,9 +8,9 @@ enum class ScheduleMode : uint8_t {
 };
 
 // What DoorController last actually did - a historical record for display
-// only. Nothing in the firmware gates a decision on it: whether to move is
-// entirely up to the caller (Scheduler's lastOpenDay/lastCloseDay for the
-// daily schedule, or an explicit force button).
+// only. Nothing in the firmware gates a decision on it: Scheduler moves the
+// door purely on "is now in today's open/close window", with no memory of
+// whether it already did so - see Scheduler::handleDueActions().
 enum class DoorAction : uint8_t {
     NONE = 0,
     OPENED = 1,
@@ -39,9 +39,6 @@ struct Config {
     DoorAction lastEventAction = DoorAction::NONE;
     uint32_t lastEventUnixTime = 0;  // UTC unix time; 0 = never
     uint32_t motorRunMs = 15000;
-
-    uint16_t lastOpenDay = 0xFFFF;  // days-since-epoch, 0xFFFF = never
-    uint16_t lastCloseDay = 0xFFFF;
 
     bool configured = false;
 };

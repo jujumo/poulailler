@@ -218,10 +218,13 @@ void WebPortal::run(unsigned long durationMs) {
         // happens to land right on a due time) would be silently skipped
         // until tomorrow - handleDueActions() otherwise only ever runs on
         // the DS3231-alarm wake path. Throttled since it does RTC/I2C reads
-        // and sun-time math that don't need sub-second freshness.
+        // and sun-time math that don't need sub-second freshness - but note
+        // handleDueActions() has no "already done" memory, so as long as
+        // now stays inside the open/close window (up to ~12 minutes) this
+        // re-fires the same move every kScheduleCheckIntervalMs, by design.
         if (millis() - lastScheduleCheck >= kScheduleCheckIntervalMs) {
             lastScheduleCheck = millis();
-            Scheduler::handleDueActions(cfg_, rtc_, store_, door_);
+            Scheduler::handleDueActions(cfg_, rtc_, door_);
         }
 
         delay(2);
@@ -391,16 +394,11 @@ void WebPortal::handleSaveConfig() {
 #ifdef DEBUG_TRACES
     // Same resolution Scheduler actually schedules against (see
     // resolveScheduleForDisplay() above) - lets a save be cross-checked
-    // against what the next real wake cycle will do. lastOpenDay/
-    // lastCloseDay are what actually gates whether today's action still
-    // fires - if lastCloseDay already equals today, no close time you set
-    // will trigger again until tomorrow, regardless of the door's state.
+    // against what the next real wake cycle will do.
     ResolvedSchedule nextOpen = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
     ResolvedSchedule nextClose = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
-    TRACEF("[Config] settings saved - next open %s UTC / %s local, next close %s UTC / %s local "
-           "(lastOpenDay=%u lastCloseDay=%u)",
-           nextOpen.utc.c_str(), nextOpen.local.c_str(), nextClose.utc.c_str(), nextClose.local.c_str(),
-           cfg_.lastOpenDay, cfg_.lastCloseDay);
+    TRACEF("[Config] settings saved - next open %s UTC / %s local, next close %s UTC / %s local",
+           nextOpen.utc.c_str(), nextOpen.local.c_str(), nextClose.utc.c_str(), nextClose.local.c_str());
 #endif
 
     statusMessage_ = "Settings saved.";

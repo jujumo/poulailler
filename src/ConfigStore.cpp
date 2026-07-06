@@ -29,9 +29,6 @@ Config ConfigStore::load() {
     cfg.lastEventUnixTime = prefs.getULong("lastEvtTime", cfg.lastEventUnixTime);
     cfg.motorRunMs = prefs.getULong("motorRunMs", cfg.motorRunMs);
 
-    cfg.lastOpenDay = prefs.getUShort("lastOpenDay", cfg.lastOpenDay);
-    cfg.lastCloseDay = prefs.getUShort("lastCloseDay", cfg.lastCloseDay);
-
     cfg.configured = prefs.getBool("configured", cfg.configured);
     prefs.end();
 
@@ -57,9 +54,6 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction));
     prefs.putULong("lastEvtTime", cfg.lastEventUnixTime);
     prefs.putULong("motorRunMs", cfg.motorRunMs);
-
-    prefs.putUShort("lastOpenDay", cfg.lastOpenDay);
-    prefs.putUShort("lastCloseDay", cfg.lastCloseDay);
 
     prefs.putBool("configured", cfg.configured);
     prefs.end();

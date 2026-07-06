@@ -98,7 +98,7 @@ void setup() {
     } else {
         // Woken by the DS3231 alarm (ext0) or the fallback timer.
         rtc.clearAlarm();  // must happen before re-arming, see Scheduler
-        Scheduler::handleDueActions(cfg, rtc, store, door);
+        Scheduler::handleDueActions(cfg, rtc, door);
     }
 
 
