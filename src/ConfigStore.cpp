@@ -24,7 +24,9 @@ Config ConfigStore::load() {
     cfg.closeAbsMinutes = prefs.getUShort("closeAbsMin", cfg.closeAbsMinutes);
     cfg.closeSunOffsetMinutes = static_cast<int16_t>(prefs.getShort("closeSunOff", cfg.closeSunOffsetMinutes));
 
-    cfg.doorState = static_cast<DoorState>(prefs.getUChar("doorState", static_cast<uint8_t>(cfg.doorState)));
+    cfg.lastEventAction = static_cast<DoorAction>(
+        prefs.getUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction)));
+    cfg.lastEventUnixTime = prefs.getULong("lastEvtTime", cfg.lastEventUnixTime);
     cfg.motorRunMs = prefs.getULong("motorRunMs", cfg.motorRunMs);
 
     cfg.lastOpenDay = prefs.getUShort("lastOpenDay", cfg.lastOpenDay);
@@ -52,7 +54,8 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUShort("closeAbsMin", cfg.closeAbsMinutes);
     prefs.putShort("closeSunOff", cfg.closeSunOffsetMinutes);
 
-    prefs.putUChar("doorState", static_cast<uint8_t>(cfg.doorState));
+    prefs.putUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction));
+    prefs.putULong("lastEvtTime", cfg.lastEventUnixTime);
     prefs.putULong("motorRunMs", cfg.motorRunMs);
 
     prefs.putUShort("lastOpenDay", cfg.lastOpenDay);

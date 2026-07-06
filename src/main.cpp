@@ -16,10 +16,10 @@ constexpr unsigned long kConfigPortalDurationMs = 5UL * 60UL * 1000UL;
 #ifdef DEBUG_TRACES
 // UNDEFINED here means a *real* reset (power-on, manual reset, or a
 // brownout) rather than a clean deep-sleep wake - worth naming explicitly
-// since it's the tell for "the motor's current draw browned out the MCU
-// mid-move", which leaves doorState stuck at UNKNOWN (see DoorController)
-// and reroutes this boot into the 5-minute config portal instead of
-// resuming the schedule.
+// since a brownout mid-move (the motor's current draw sagging the supply)
+// reroutes this boot into the 5-minute config portal instead of resuming
+// the schedule, and cfg.lastEventAction won't have advanced past whatever
+// completed before the interrupted move.
 const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
     switch (cause) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
@@ -33,14 +33,14 @@ const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
     }
 }
 
-const char* doorStateName(DoorState state) {
-    switch (state) {
-        case DoorState::OPEN:
-            return "OPEN";
-        case DoorState::CLOSED:
+const char* doorActionName(DoorAction action) {
+    switch (action) {
+        case DoorAction::OPENED:
+            return "OPENED";
+        case DoorAction::CLOSED:
             return "CLOSED";
         default:
-            return "UNKNOWN";
+            return "NONE";
     }
 }
 #endif
@@ -63,7 +63,7 @@ void setup() {
     RtcManager rtc;
     rtc.begin();
 
-    DoorController door(store);
+    DoorController door(store, rtc);
     door.begin();
 
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
@@ -76,15 +76,17 @@ void setup() {
     if (rtc.isTimeValid()) {
         DateTime utcNow = rtc.now();
         TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, cfg.timezone);
-        TRACEF("[Boot] wake cause=%s doorState=%s RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
+        TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
                "%04d-%02d-%02d %02d:%02d:%02d local",
-               wakeCauseName(cause), doorStateName(cfg.doorState), utcNow.year(), utcNow.month(),
+               wakeCauseName(cause), doorActionName(cfg.lastEventAction),
+               static_cast<unsigned long>(cfg.lastEventUnixTime), utcNow.year(), utcNow.month(),
                utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second(), localNow.dt.year(),
                localNow.dt.month(), localNow.dt.day(), localNow.dt.hour(), localNow.dt.minute(),
                localNow.dt.second());
     } else {
-        TRACEF("[Boot] wake cause=%s doorState=%s, RTC time not valid (never set / lost power)",
-               wakeCauseName(cause), doorStateName(cfg.doorState));
+        TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu, RTC time not valid (never set / lost power)",
+               wakeCauseName(cause), doorActionName(cfg.lastEventAction),
+               static_cast<unsigned long>(cfg.lastEventUnixTime));
     }
 #endif
 

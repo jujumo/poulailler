@@ -39,11 +39,12 @@ python3 mock/dev_portal_mock.py       # serves http://127.0.0.1:8080/
 ```
 
 It mirrors the same routes, field names, and validation ranges as the real
-portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`), backed by
-an in-memory config that resets when you restart it. Sunrise/sunset is
-computed with a pure-Python port of the same NOAA algorithm `Dusk2Dawn`
+portal (`/`, `/save`, `/settime`, `/force-open`, `/force-close`, `/sleep`),
+backed by an in-memory config that resets when you restart it. Sunrise/sunset
+is computed with a pure-Python port of the same NOAA algorithm `Dusk2Dawn`
 uses, so the sun-offset fields behave like the real device. It does
-**not** drive GPIO or persist to NVS, though — it's purely for the page
+**not** drive GPIO or persist to NVS, and `/sleep` is a no-op acknowledgment
+rather than a real deep-sleep/reboot — it's purely for iterating on the page
 itself.
 Its markup is loaded straight from `src/WebPortalTemplate.h` and re-read on
 every request, so editing that file and reloading the browser is enough —
@@ -52,7 +53,7 @@ there's no separate copy to keep in sync.
 Smoke-tested end to end (already verified): `GET /` renders the form,
 `POST /save` persists valid input and rejects invalid input (e.g. an
 out-of-range latitude) with a 400 instead of partially saving, and
-`POST /force-open` / `/force-close` update the displayed door state.
+`POST /force-open` / `/force-close` update the displayed last event.
 
 ## Building and flashing
 
@@ -77,8 +78,8 @@ out-of-range latitude) with a 400 instead of partially saving, and
 
 ![Config page screenshot](doc/screenshot.png)
 
-1. Power on the board. It starts a WiFi access point: **SSID `CoopDoor-Setup`**,
-   password `coopdoor1234` (change it in `include/config.h` if you like).
+1. Power on the board. It starts a WiFi access point: **SSID `CoopDoor`**,
+   password `123456789` (change it in `include/config.h` if you like).
 2. Connect a phone/laptop to that AP. Most devices will auto-prompt to open
    the config page (captive portal detection); if yours doesn't, browse to
    `http://192.168.4.1/` manually.
@@ -100,7 +101,24 @@ out-of-range latitude) with a 400 instead of partially saving, and
 
 After the 5-minute window (or immediately, if the board woke from an RTC
 alarm rather than a fresh power-on), it computes the next due action, arms
-the DS3231 alarm for it, and goes into deep sleep.
+the DS3231 alarm for it, and goes into deep sleep. The page also keeps
+re-checking the schedule every few seconds while it's open, so a schedule
+you just saved for a few minutes from now can fire and move the door live,
+without waiting for the portal to close.
+
+## Debug tracing
+
+Flash `make flash-debug` instead of `make flash` to get a build with serial
+traces enabled (boot/wake cause, resolved open/close times, door moves,
+portal activity and saves — see `include/Debug.h` and the "Debugging"
+section of `CLAUDE.md` for the full list). It's the same firmware otherwise;
+a plain `make build`/`make flash` never compiles any of it in.
+
+On the config page's Debug panel, **Sleep now** ends the portal immediately
+and puts the board to deep sleep, instead of waiting out the rest of the
+5-minute window — useful for quickly getting to a real DS3231/`ext0` wake
+to confirm the schedule fires correctly on its own, without the portal's
+live schedule-check (above) doing the work instead.
 
 ## What to verify on real hardware
 
@@ -130,6 +148,12 @@ This project was written and built without physical hardware in the loop
 
 - **No limit switches / no current sensing** — door travel end is detected
   purely by a calibrated timed motor run.
+- **The door's last-known state is display-only** — `DoorController` always
+  moves when told to; only `lastOpenDay`/`lastCloseDay` (has today's action
+  already run?) decides whether the schedule calls it at all. An earlier
+  design used the door's last state as an extra gate, which silently
+  no-op'd a due schedule whenever that state already happened to match the
+  target (e.g. right after an unrelated force-test) with no visible effect.
 - **Sunrise/sunset** comes from the `Dusk2Dawn` library rather than a
   hand-rolled implementation — it depends on `Arduino.h`, so it only
   builds for `esp32dev`, not on a plain desktop.

@@ -52,7 +52,8 @@ config = {
     "closeMode": "absolute",
     "closeAbsMinutes": 1140,      # 19:00
     "closeSunOffsetMinutes": 0,
-    "doorState": "UNKNOWN",       # UNKNOWN | OPEN | CLOSED
+    "lastEventAction": "NONE",    # NONE | OPENED | CLOSED - display-only, mirrors DoorAction
+    "lastEventUnixTime": 0,       # 0 = never
     "motorRunMs": 15000,
 }
 
@@ -270,6 +271,18 @@ def resolve_utc_minutes(mode, abs_minutes, sun_offset_minutes, sun_event_utc_min
     return utc_target.hour * 60 + utc_target.minute
 
 
+def format_last_event():
+    """Mirrors WebPortal.cpp's formatLastEvent(): display-only history of
+    the last completed move, never a gate on whether the schedule fires."""
+    if config["lastEventAction"] == "NONE" or config["lastEventUnixTime"] == 0:
+        return "none yet"
+    event_utc = datetime.fromtimestamp(config["lastEventUnixTime"], tz=timezone.utc)
+    event_local = event_utc.astimezone(ZoneInfo(config["timezone"]))
+    verb = "Opened" if config["lastEventAction"] == "OPENED" else "Closed"
+    return (f"{verb} at {event_local.strftime('%Y-%m-%d %H:%M:%S')} local "
+            f"({event_utc.strftime('%H:%M:%S')} UTC)")
+
+
 def resolve_schedule_for_display(is_open):
     """Mirrors WebPortal.cpp's resolveScheduleForDisplay(): what a
     configured open/close schedule actually resolves to today, in both UTC
@@ -370,7 +383,7 @@ def build_index_html():
 
     html = html.replace("{{MOTOR_RUN_MS}}", str(config["motorRunMs"]))
 
-    html = html.replace("{{DOOR_STATE}}", config["doorState"])
+    html = html.replace("{{LAST_EVENT}}", format_last_event())
 
     return html
 
@@ -410,12 +423,20 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/settime":
             self._handle_settime(args)
         elif self.path == "/force-open":
-            config["doorState"] = "OPEN"
+            config["lastEventAction"] = "OPENED"
+            config["lastEventUnixTime"] = int(rtc_now_utc().timestamp())
             status_message = "Door forced open."
             self._redirect_to_root()
         elif self.path == "/force-close":
-            config["doorState"] = "CLOSED"
+            config["lastEventAction"] = "CLOSED"
+            config["lastEventUnixTime"] = int(rtc_now_utc().timestamp())
             status_message = "Door forced closed."
+            self._redirect_to_root()
+        elif self.path == "/sleep":
+            # Real firmware deep-sleeps and reboots into setup() on wake;
+            # this mock has no sleep/wake cycle to simulate, so just
+            # acknowledge the click.
+            status_message = "Sleep requested (mock doesn't simulate deep sleep/reboot)."
             self._redirect_to_root()
         else:
             self._redirect_to_root()

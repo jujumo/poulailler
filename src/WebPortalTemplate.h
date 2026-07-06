@@ -57,7 +57,8 @@ button{padding:.6em 1em;margin-top:.5em}
 <fieldset class='force'><legend>Debug</legend>
 <form method='POST' action='/force-open' style='display:inline'><button type='submit'>Force Open</button></form>
 <form method='POST' action='/force-close' style='display:inline'><button type='submit'>Force Close</button></form>
-<p>Door state: {{DOOR_STATE}}</p>
+<form method='POST' action='/sleep' style='display:inline'><button type='submit'>Sleep now</button></form>
+<p>Last event: {{LAST_EVENT}}</p>
 </fieldset>
 <script>
 function fillTime(f){var d=new Date();

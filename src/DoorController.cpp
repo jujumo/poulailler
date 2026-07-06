@@ -5,7 +5,7 @@
 #include "Debug.h"
 #include "config.h"
 
-DoorController::DoorController(ConfigStore& store) : store_(store) {}
+DoorController::DoorController(ConfigStore& store, RtcManager& rtc) : store_(store), rtc_(rtc) {}
 
 void DoorController::begin() {
     pinMode(PIN_MOTOR_R_EN, OUTPUT);
@@ -15,28 +15,12 @@ void DoorController::begin() {
     stopMotor();
 }
 
-void DoorController::open(Config& cfg, bool force) {
-    run(cfg, DoorState::OPEN, /*rpwmHigh=*/true, force);
-}
+void DoorController::open(Config& cfg) { run(cfg, DoorAction::OPENED, /*rpwmHigh=*/true); }
 
-void DoorController::close(Config& cfg, bool force) {
-    run(cfg, DoorState::CLOSED, /*rpwmHigh=*/false, force);
-}
+void DoorController::close(Config& cfg) { run(cfg, DoorAction::CLOSED, /*rpwmHigh=*/false); }
 
-void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool force) {
-    if (!force && cfg.doorState == target) {
-        TRACE(target == DoorState::OPEN ? "[Door] already open, skipping"
-                                         : "[Door] already closed, skipping");
-        return;  // already there - idempotent unless explicitly forced
-    }
-
-    TRACE(target == DoorState::OPEN ? "[Door] opening" : "[Door] closing");
-
-    // Write-ahead: record "in motion / unsure" before the risky part, so a
-    // brownout mid-move leaves an honest UNKNOWN state rather than a stale
-    // wrong OPEN/CLOSED.
-    cfg.doorState = DoorState::UNKNOWN;
-    store_.save(cfg);
+void DoorController::run(Config& cfg, DoorAction action, bool rpwmHigh) {
+    TRACE(action == DoorAction::OPENED ? "[Door] opening" : "[Door] closing");
 
     digitalWrite(PIN_MOTOR_R_EN, HIGH);
     digitalWrite(PIN_MOTOR_L_EN, HIGH);
@@ -63,10 +47,11 @@ void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool forc
     // Movement done but device is still awake - back to solid on.
     digitalWrite(PIN_STATUS_LED, HIGH);
 
-    cfg.doorState = target;
+    cfg.lastEventAction = action;
+    cfg.lastEventUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
     store_.save(cfg);
 
-    TRACE(target == DoorState::OPEN ? "[Door] opened" : "[Door] closed");
+    TRACE(action == DoorAction::OPENED ? "[Door] opened" : "[Door] closed");
 }
 
 void DoorController::stopMotor() {

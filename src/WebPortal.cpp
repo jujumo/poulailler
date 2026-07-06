@@ -120,6 +120,23 @@ ResolvedSchedule resolveScheduleForDisplay(const Config& cfg, RtcManager& rtc, b
     return result;
 }
 
+// "Opened at 2026-07-06 22:21:00 local (20:21:00 UTC)" - display-only, see
+// DoorAction's comment in ConfigStore.h for why this is never used as a gate.
+String formatLastEvent(const Config& cfg) {
+    if (cfg.lastEventAction == DoorAction::NONE || cfg.lastEventUnixTime == 0) {
+        return "none yet";
+    }
+    DateTime eventUtc(cfg.lastEventUnixTime);
+    TimeZone::LocalTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone);
+    char buf[80];
+    snprintf(buf, sizeof(buf), "%s at %04d-%02d-%02d %02d:%02d:%02d local (%02d:%02d:%02d UTC)",
+             cfg.lastEventAction == DoorAction::OPENED ? "Opened" : "Closed", eventLocal.dt.year(),
+             eventLocal.dt.month(), eventLocal.dt.day(), eventLocal.dt.hour(),
+             eventLocal.dt.minute(), eventLocal.dt.second(), eventUtc.hour(), eventUtc.minute(),
+             eventUtc.second());
+    return String(buf);
+}
+
 // Formats a signed UTC offset like "+02:00", with " (DST)" appended when the
 // zone's daylight-saving rule is in effect.
 String formatUtcOffset(int offsetMinutes, bool isDst) {
@@ -223,6 +240,7 @@ void WebPortal::setupRoutes() {
     server_.on("/settime", HTTP_POST, [this]() { handleSetTime(); });
     server_.on("/force-open", HTTP_POST, [this]() { handleForceOpen(); });
     server_.on("/force-close", HTTP_POST, [this]() { handleForceClose(); });
+    server_.on("/sleep", HTTP_POST, [this]() { handleSleepNow(); });
     server_.onNotFound([this]() { redirectToRoot(); });
 }
 
@@ -286,9 +304,7 @@ String WebPortal::buildIndexHtml() {
 
     html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
 
-    html.replace("{{DOOR_STATE}}", cfg_.doorState == DoorState::OPEN     ? "OPEN"
-                                    : cfg_.doorState == DoorState::CLOSED ? "CLOSED"
-                                                                          : "UNKNOWN");
+    html.replace("{{LAST_EVENT}}", formatLastEvent(cfg_));
 
     return html;
 }
@@ -375,15 +391,16 @@ void WebPortal::handleSaveConfig() {
 #ifdef DEBUG_TRACES
     // Same resolution Scheduler actually schedules against (see
     // resolveScheduleForDisplay() above) - lets a save be cross-checked
-    // against what the next real wake cycle will do, and doorState/lastXDay
-    // rule out "already at target, so idempotently skipped" as the cause of
-    // a schedule that appears to silently do nothing.
+    // against what the next real wake cycle will do. lastOpenDay/
+    // lastCloseDay are what actually gates whether today's action still
+    // fires - if lastCloseDay already equals today, no close time you set
+    // will trigger again until tomorrow, regardless of the door's state.
     ResolvedSchedule nextOpen = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
     ResolvedSchedule nextClose = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
     TRACEF("[Config] settings saved - next open %s UTC / %s local, next close %s UTC / %s local "
-           "(doorState=%d lastOpenDay=%u lastCloseDay=%u)",
+           "(lastOpenDay=%u lastCloseDay=%u)",
            nextOpen.utc.c_str(), nextOpen.local.c_str(), nextClose.utc.c_str(), nextClose.local.c_str(),
-           static_cast<int>(cfg_.doorState), cfg_.lastOpenDay, cfg_.lastCloseDay);
+           cfg_.lastOpenDay, cfg_.lastCloseDay);
 #endif
 
     statusMessage_ = "Settings saved.";
@@ -418,13 +435,32 @@ void WebPortal::handleSetTime() {
 }
 
 void WebPortal::handleForceOpen() {
-    door_.open(cfg_, /*force=*/true);  // DoorController persists doorState itself
+    door_.open(cfg_);  // DoorController persists lastEventAction/lastEventUnixTime itself
     statusMessage_ = "Door forced open.";
     redirectToRoot();
 }
 
 void WebPortal::handleForceClose() {
-    door_.close(cfg_, /*force=*/true);  // DoorController persists doorState itself
+    door_.close(cfg_);  // DoorController persists lastEventAction/lastEventUnixTime itself
     statusMessage_ = "Door forced closed.";
     redirectToRoot();
+}
+
+// Debug aid: skip the rest of the 5-minute portal window and go straight to
+// deep sleep, so a real DS3231-alarm/ext0 wake can be exercised without
+// waiting out the timer - useful for verifying the awake/asleep cycle
+// itself rather than the scheduling logic. armNextAlarmAndSleep() is
+// [[noreturn]] (ends in esp_deep_sleep_start()), so nothing after this call
+// - including WebPortal::run()'s own loop - ever executes again this boot.
+void WebPortal::handleSleepNow() {
+    TRACE("[WebPortal] manual sleep requested");
+    server_.send(200, "text/plain", "Going to sleep now.");
+    delay(50);  // best-effort: give the response a chance to leave the socket before WiFi drops
+
+    httpsStub_.stop();
+    server_.stop();
+    dnsServer_.stop();
+    WiFi.softAPdisconnect(true);
+
+    Scheduler::armNextAlarmAndSleep(cfg_, rtc_, store_);  // never returns
 }
