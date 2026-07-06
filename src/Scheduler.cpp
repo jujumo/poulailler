@@ -4,7 +4,7 @@
 #include <WiFi.h>
 #include <esp_sleep.h>
 
-#include "config.h"
+#include "config.h"  // must come before Arduino.h to override LED_BUILTIN
 #include "TimeZone.h"
 
 namespace {
@@ -36,6 +36,8 @@ bool inWindow(int nowMinutes, int targetMinutes) {
 
 [[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool armExt0) {
     WiFi.mode(WIFI_OFF);
+    // Turn off LED before going to sleep
+    digitalWrite(PIN_STATUS_LED, LOW);
     if (armExt0) {
         esp_sleep_enable_ext0_wakeup(PIN_RTC_INT, 0);  // DS3231 INT asserts LOW
     }

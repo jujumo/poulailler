@@ -20,6 +20,9 @@
 #define PIN_MOTOR_LPWM 25
 // R_IS / L_IS (current sense) intentionally left unconnected - not used.
 
+// LED indicator (blue LED on most ESP32 boards)
+#define PIN_STATUS_LED 2
+
 // WiFi access point served for 5 minutes right after power-on/reset.
 #define WIFI_AP_SSID "CoopDoor"
 #define WIFI_AP_PASSWORD "123456789"  // WPA2, >=8 chars
