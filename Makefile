@@ -7,7 +7,7 @@
 # if neither guess is right for your machine.
 PIO := $(shell command -v pio >/dev/null 2>&1 && pio --version >/dev/null 2>&1 && echo pio || echo $(HOME)/.platformio/penv/bin/pio)
 
-.PHONY: build upload monitor flash clean
+.PHONY: build upload monitor flash clean debug upload-debug flash-debug
 
 build:
 	$(PIO) run
@@ -22,3 +22,14 @@ flash: upload monitor
 
 clean:
 	$(PIO) run -t clean
+
+# Debug build: same firmware, with -D DEBUG_TRACES enabling the Serial
+# lifecycle traces (WiFi up, client connect, settings saved, door
+# open/close) - see the esp32dev-debug env in platformio.ini.
+debug:
+	$(PIO) run -e esp32dev-debug
+
+upload-debug:
+	$(PIO) run -e esp32dev-debug -t upload
+
+flash-debug: upload-debug monitor

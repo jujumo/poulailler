@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 
+#include "Debug.h"
 #include "Scheduler.h"
 #include "TimeZone.h"
 #include "TimeZones.h"
@@ -148,8 +149,12 @@ WebPortal::WebPortal(ConfigStore& store, RtcManager& rtc, DoorController& door)
 void WebPortal::run(unsigned long durationMs) {
     cfg_ = store_.load();
 
+    WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) { TRACE("[WiFi] client connected"); },
+                 ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid, kApPassword);
+    TRACEF("[WiFi] AP started: %s", kApSsid);
 
     // softAP() alone never hands out a DNS server via DHCP (arduino-esp32
     // only does that inside softAPConfig(), and only when its dns argument
@@ -331,6 +336,7 @@ void WebPortal::handleSaveConfig() {
     next.configured = true;
     store_.save(next);
     cfg_ = next;
+    TRACE("[Config] settings saved");
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }

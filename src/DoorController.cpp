@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 
+#include "Debug.h"
 #include "config.h"
 
 DoorController::DoorController(ConfigStore& store) : store_(store) {}
@@ -26,6 +27,8 @@ void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool forc
     if (!force && cfg.doorState == target) {
         return;  // already there - idempotent unless explicitly forced
     }
+
+    TRACE(target == DoorState::OPEN ? "[Door] opening" : "[Door] closing");
 
     // Write-ahead: record "in motion / unsure" before the risky part, so a
     // brownout mid-move leaves an honest UNKNOWN state rather than a stale
@@ -60,6 +63,8 @@ void DoorController::run(Config& cfg, DoorState target, bool rpwmHigh, bool forc
 
     cfg.doorState = target;
     store_.save(cfg);
+
+    TRACE(target == DoorState::OPEN ? "[Door] opened" : "[Door] closed");
 }
 
 void DoorController::stopMotor() {
