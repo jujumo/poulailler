@@ -45,8 +45,6 @@ void setup() {
         Scheduler::handleDueActions(cfg, rtc, store, door);
     }
 
-    // Keep status LED on for configured duration to indicate the ESP32 is awake
-    delay(STATUS_LED_AWAKE_SECONDS * 1000UL);
 
     Scheduler::armNextAlarmAndSleep(cfg, rtc, store);  // never returns
 }
