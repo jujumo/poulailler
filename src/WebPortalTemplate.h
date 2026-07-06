@@ -17,6 +17,10 @@ button{padding:.6em 1em;margin-top:.5em}
 <h2>Coop Door Setup</h2>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
 {{STATUS_BLOCK}}
+<form method='POST' action='/settime' onsubmit='return fillTime(this)'>
+<input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
+<input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>
+<button type='submit'>Sync time from this device</button></form>
 <form method='POST' action='/save'>
 <fieldset><legend>Current RTC time</legend>
 {{NOW_SUFFIX}}
@@ -27,10 +31,6 @@ button{padding:.6em 1em;margin-top:.5em}
 <p>Next sunrise (UTC): {{SUNRISE_UTC}}</p>
 <p>Next sunset (local): {{SUNSET}}</p>
 <p>Next sunset (UTC): {{SUNSET_UTC}}</p>
-<form method='POST' action='/settime' onsubmit='return fillTime(this)'>
-<input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
-<input type='hidden' name='h'><input type='hidden' name='mi'><input type='hidden' name='s'>
-<button type='submit'>Sync time from this device</button></form>
 </fieldset>
 <fieldset><legend>Location</legend>
 <label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='{{LAT}}'></label>
