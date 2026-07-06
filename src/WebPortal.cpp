@@ -339,7 +339,21 @@ void WebPortal::handleSaveConfig() {
     next.configured = true;
     store_.save(next);
     cfg_ = next;
-    TRACE("[Config] settings saved");
+
+#ifdef DEBUG_TRACES
+    // Same resolution Scheduler actually schedules against (see
+    // resolveScheduleForDisplay() above) - lets a save be cross-checked
+    // against what the next real wake cycle will do, and doorState/lastXDay
+    // rule out "already at target, so idempotently skipped" as the cause of
+    // a schedule that appears to silently do nothing.
+    ResolvedSchedule nextOpen = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
+    ResolvedSchedule nextClose = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
+    TRACEF("[Config] settings saved - next open %s UTC / %s local, next close %s UTC / %s local "
+           "(doorState=%d lastOpenDay=%u lastCloseDay=%u)",
+           nextOpen.utc.c_str(), nextOpen.local.c_str(), nextClose.utc.c_str(), nextClose.local.c_str(),
+           static_cast<int>(cfg_.doorState), cfg_.lastOpenDay, cfg_.lastCloseDay);
+#endif
+
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }
