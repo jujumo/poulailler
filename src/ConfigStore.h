@@ -39,6 +39,7 @@ struct Config {
     DoorAction lastEventAction = DoorAction::NONE;
     uint32_t lastEventUnixTime = 0;  // UTC unix time; 0 = never
     uint32_t motorRunMs = 15000;
+    bool motorInvertDirection = false;  // swap open/close PWM direction
 
     bool configured = false;
 };

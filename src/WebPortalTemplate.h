@@ -52,6 +52,7 @@ button{padding:.6em 1em;margin-top:.5em}
 </fieldset>
 <fieldset><legend>Motor</legend>
 <label>Run duration, ms<input type='number' name='motorRunMs' value='{{MOTOR_RUN_MS}}'></label>
+<label>Invert direction<input type='checkbox' name='motorInvertDirection'{{MOTOR_INVERT_CHECKED}}></label>
 </fieldset>
 <button type='submit'>Save settings</button></form>
 <fieldset class='force'><legend>Debug</legend>

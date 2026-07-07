@@ -26,8 +26,9 @@ void DoorController::run(Config& cfg, DoorAction action, bool rpwmHigh) {
     digitalWrite(PIN_MOTOR_L_EN, HIGH);
     // Direction: verify against actual wiring during hardware bring-up and
     // swap RPWM/LPWM below if "open" and "close" are reversed.
-    digitalWrite(PIN_MOTOR_RPWM, rpwmHigh ? HIGH : LOW);
-    digitalWrite(PIN_MOTOR_LPWM, rpwmHigh ? LOW : HIGH);
+    bool invert = cfg.motorInvertDirection;
+    digitalWrite(PIN_MOTOR_RPWM, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? HIGH : LOW);
+    digitalWrite(PIN_MOTOR_LPWM, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? LOW : HIGH);
 
     // Blink the status LED at 2Hz (250ms half-period) for the duration of
     // the move instead of a single blocking delay, so "door moving" is

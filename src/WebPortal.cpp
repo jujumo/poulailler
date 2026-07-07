@@ -306,6 +306,7 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{CLOSE_LOCAL}}", closeResolved.local);
 
     html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
+    html.replace("{{MOTOR_INVERT_CHECKED}}", cfg_.motorInvertDirection ? "checked" : "");
 
     html.replace("{{LAST_EVENT}}", formatLastEvent(cfg_));
 

@@ -28,6 +28,7 @@ Config ConfigStore::load() {
         prefs.getUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction)));
     cfg.lastEventUnixTime = prefs.getULong("lastEvtTime", cfg.lastEventUnixTime);
     cfg.motorRunMs = prefs.getULong("motorRunMs", cfg.motorRunMs);
+    cfg.motorInvertDirection = prefs.getBool("motorInvertDir", cfg.motorInvertDirection);
 
     cfg.configured = prefs.getBool("configured", cfg.configured);
     prefs.end();
@@ -54,6 +55,7 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction));
     prefs.putULong("lastEvtTime", cfg.lastEventUnixTime);
     prefs.putULong("motorRunMs", cfg.motorRunMs);
+    prefs.putBool("motorInvertDir", cfg.motorInvertDirection);
 
     prefs.putBool("configured", cfg.configured);
     prefs.end();
