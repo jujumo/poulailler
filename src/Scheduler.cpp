@@ -100,7 +100,8 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
     return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
 }
 
-void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
+void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
+                       DueActionTracker* tracker) {
     if (!rtc.isTimeValid()) {
         // No valid time (never configured / lost power) - don't act on
         // garbage time. armNextAlarmAndSleep() will handle the short retry.
@@ -125,18 +126,31 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
     // trigger window". DoorController itself has no gate either (see its
     // comment), so this is the only thing standing between "it's time" and
     // the motor running. That means a wake that lands twice in the same
-    // window (e.g. the portal's periodic re-check below, or an overlapping
-    // fallback-timer wake) re-triggers the move each time - deliberate,
-    // per the request to drop the day-based bookkeeping entirely.
+    // window (e.g. an overlapping fallback-timer wake) re-triggers the move
+    // each time - deliberate, per the request to drop the day-based
+    // bookkeeping entirely. The optional `tracker` is not that bookkeeping:
+    // it's an in-RAM-only debounce keyed on the resolved target minute, used
+    // by WebPortal's repeated same-session polling below (see
+    // DueActionTracker's comment in Scheduler.h).
     bool openDue = inWindow(nowMinutes, openMinutes);
     bool closeDue = inWindow(nowMinutes, closeMinutes);
 
-    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC due=%d | close=%02d:%02d UTC due=%d",
-           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDue,
-           closeMinutes / 60, closeMinutes % 60, closeDue);
+    bool openAlreadyFired = tracker != nullptr && tracker->lastOpenFiredMinutes == openMinutes;
+    bool closeAlreadyFired = tracker != nullptr && tracker->lastCloseFiredMinutes == closeMinutes;
 
-    if (openDue) door.open(cfg);
-    if (closeDue) door.close(cfg);
+    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC due=%d skip=%d | "
+           "close=%02d:%02d UTC due=%d skip=%d",
+           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDue,
+           openAlreadyFired, closeMinutes / 60, closeMinutes % 60, closeDue, closeAlreadyFired);
+
+    if (openDue && !openAlreadyFired) {
+        door.open(cfg);
+        if (tracker != nullptr) tracker->lastOpenFiredMinutes = openMinutes;
+    }
+    if (closeDue && !closeAlreadyFired) {
+        door.close(cfg);
+        if (tracker != nullptr) tracker->lastCloseFiredMinutes = closeMinutes;
+    }
 }
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {

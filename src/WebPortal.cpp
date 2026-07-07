@@ -207,6 +207,11 @@ void WebPortal::run(unsigned long durationMs) {
 
     unsigned long start = millis();
     unsigned long lastScheduleCheck = start;
+    // Session-local only - never a class member, never written to NVS/RTC -
+    // so it carries no memory across a sleep cycle and isn't a
+    // reintroduction of the removed day-based idempotency gates (see
+    // DoorController's and Scheduler's comments).
+    Scheduler::DueActionTracker dueActionTracker;
     while (millis() - start < durationMs) {
         dnsServer_.processNextRequest();
         if (httpsStub_.hasClient()) httpsStub_.accept().stop();
@@ -218,13 +223,17 @@ void WebPortal::run(unsigned long durationMs) {
         // happens to land right on a due time) would be silently skipped
         // until tomorrow - handleDueActions() otherwise only ever runs on
         // the DS3231-alarm wake path. Throttled since it does RTC/I2C reads
-        // and sun-time math that don't need sub-second freshness - but note
-        // handleDueActions() has no "already done" memory, so as long as
-        // now stays inside the open/close window (up to ~12 minutes) this
-        // re-fires the same move every kScheduleCheckIntervalMs, by design.
+        // and sun-time math that don't need sub-second freshness.
+        //
+        // dueActionTracker is passed so a repeat poll landing on the same
+        // resolved target minute it already fired for is skipped instead of
+        // re-running the motor every kScheduleCheckIntervalMs for the whole
+        // ~12-minute window. Editing the schedule mid-session (e.g. /save)
+        // to a genuinely different resolved target still fires immediately,
+        // since the check compares the resolved value, not a boolean flag.
         if (millis() - lastScheduleCheck >= kScheduleCheckIntervalMs) {
             lastScheduleCheck = millis();
-            Scheduler::handleDueActions(cfg_, rtc_, door_);
+            Scheduler::handleDueActions(cfg_, rtc_, door_, &dueActionTracker);
         }
 
         delay(2);
