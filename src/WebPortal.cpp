@@ -106,14 +106,7 @@ ResolvedSchedule resolveScheduleForDisplay(const Config& cfg, RtcManager& rtc, b
     DateTime utcNow = rtc.now();
     Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, utcNow.year(), utcNow.month(), utcNow.day());
 
-    ScheduleMode mode = isOpen ? cfg.openMode : cfg.closeMode;
-    uint16_t absMinutes = isOpen ? cfg.openAbsMinutes : cfg.closeAbsMinutes;
-    int16_t sunOffsetMinutes = isOpen ? cfg.openSunOffsetMinutes : cfg.closeSunOffsetMinutes;
-    int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
-
-    int utcMinutes = Scheduler::resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes,
-                                                   sunEventUtcMinutes, sun.valid, utcNow,
-                                                   cfg.timezone);
+    int utcMinutes = Scheduler::resolveScheduleMinutes(cfg, isOpen, sun, utcNow);
     DateTime utcTarget(utcNow.year(), utcNow.month(), utcNow.day(), utcMinutes / 60,
                         utcMinutes % 60, 0);
     DateTime localTarget = TimeZone::toLocal(utcTarget, cfg.timezone).dt;
@@ -124,20 +117,22 @@ ResolvedSchedule resolveScheduleForDisplay(const Config& cfg, RtcManager& rtc, b
     return result;
 }
 
-// "Opened at 2026-07-06 22:21:00 local (20:21:00 UTC)" - display-only, see
-// DoorAction's comment in ConfigStore.h for why this is never used as a gate.
+// "Opened at 2026-07-06 22:21:00 local (20:21:00 UTC)" - display-only, the
+// real (DoorController-self-timestamped) operation record, not Scheduler's
+// trigger bookkeeping - see ConfigStore.h's comment on lastOperationAction/
+// lastOperationUnixTime for why this is never used as a gate.
 String formatLastEvent(const Config& cfg) {
-    if (cfg.lastEventAction == DoorAction::NONE || cfg.lastEventUnixTime == 0) {
+    if (cfg.lastOperationAction == DoorAction::NONE || cfg.lastOperationUnixTime == 0) {
         return "none yet";
     }
-    DateTime eventUtc(cfg.lastEventUnixTime);
+    DateTime eventUtc(cfg.lastOperationUnixTime);
     TimeZone::LocalTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone);
     char buf[80];
     snprintf(buf, sizeof(buf), "%s at %04d-%02d-%02d %02d:%02d:%02d local (%02d:%02d:%02d UTC)",
-             cfg.lastEventAction == DoorAction::OPENED ? "Opened" : "Closed", eventLocal.dt.year(),
-             eventLocal.dt.month(), eventLocal.dt.day(), eventLocal.dt.hour(),
-             eventLocal.dt.minute(), eventLocal.dt.second(), eventUtc.hour(), eventUtc.minute(),
-             eventUtc.second());
+             cfg.lastOperationAction == DoorAction::OPENED ? "Opened" : "Closed",
+             eventLocal.dt.year(), eventLocal.dt.month(), eventLocal.dt.day(),
+             eventLocal.dt.hour(), eventLocal.dt.minute(), eventLocal.dt.second(), eventUtc.hour(),
+             eventUtc.minute(), eventUtc.second());
     return String(buf);
 }
 
@@ -477,13 +472,13 @@ void WebPortal::handlePing() {
 }
 
 void WebPortal::handleForceOpen() {
-    door_.open(cfg_);  // DoorController persists lastEventAction/lastEventUnixTime itself
+    door_.open(cfg_);  // DoorController self-timestamps lastOperationAction/lastOperationUnixTime
     statusMessage_ = "Door forced open.";
     redirectToRoot();
 }
 
 void WebPortal::handleForceClose() {
-    door_.close(cfg_);  // DoorController persists lastEventAction/lastEventUnixTime itself
+    door_.close(cfg_);  // DoorController self-timestamps lastOperationAction/lastOperationUnixTime
     statusMessage_ = "Door forced closed.";
     redirectToRoot();
 }

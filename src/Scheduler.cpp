@@ -114,6 +114,19 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
     return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
 }
 
+// The one place "open or close?" is dispatched for schedule resolution -
+// handleDueActions()/armNextAlarmAndSleep() below and WebPortal's display
+// code all go through this instead of duplicating the field picks.
+int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
+                            const DateTime& utcDay) {
+    ScheduleMode mode = isOpen ? cfg.openMode : cfg.closeMode;
+    uint16_t absMinutes = isOpen ? cfg.openAbsMinutes : cfg.closeAbsMinutes;
+    int16_t sunOffsetMinutes = isOpen ? cfg.openSunOffsetMinutes : cfg.closeSunOffsetMinutes;
+    int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
+    return resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes, sunEventUtcMinutes, sun.valid,
+                              utcDay, cfg.timezone);
+}
+
 void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
     if (!rtc.isTimeValid()) {
         // No valid time (never configured / lost power) - don't act on
@@ -130,31 +143,61 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
 
     SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
 
-    int openMinutes = resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                                         sun.sunriseMinutes, sun.valid, now, cfg.timezone);
-    int closeMinutes = resolveUtcMinutes(cfg.closeMode, cfg.closeAbsMinutes,
-                                          cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
-                                          now, cfg.timezone);
+    int openMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/true, sun, now);
+    int closeMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/false, sun, now);
 
-    // No "already done" memory at all - purely "is now within a few
-    // seconds of the trigger target". DoorController itself has no gate
-    // either (see its comment), so this is the only thing standing between
-    // "it's time" and the motor running. Safe to keep this simple because
-    // armNextAlarmAndSleep() wakes the device kWakeLeadMinutes before the
-    // target and WebPortal polls this every few seconds the whole time it's
-    // awake - by the time "now" actually lands in this tight window, it'll
-    // typically only do so for one or two consecutive polls before moving
-    // past it, rather than lingering there for many minutes.
+    // Purely "is now within a few seconds of the trigger target" - DoorController
+    // itself still has no gate (see its comment), so combined with the debounce
+    // below, this is the only thing standing between "it's time" and the motor
+    // running. Safe to keep this simple because armNextAlarmAndSleep() wakes the
+    // device kWakeLeadMinutes before the target and WebPortal polls this every
+    // few seconds the whole time it's awake - by the time "now" actually lands
+    // in this tight window, it'll typically only do so for one or two
+    // consecutive polls before moving past it, rather than lingering there for
+    // many minutes.
     bool openDue = inWindow(nowSeconds, openMinutes * 60);
     bool closeDue = inWindow(nowSeconds, closeMinutes * 60);
 
-    TRACEF("[Scheduler] now=%02d:%02d:%02d UTC | open=%02d:%02d UTC due=%d | "
-           "close=%02d:%02d UTC due=%d",
-           nowMinutes / 60, nowMinutes % 60, now.second(), openMinutes / 60, openMinutes % 60,
-           openDue, closeMinutes / 60, closeMinutes % 60, closeDue);
+    // Basic debounce: compare against cfg.lastTriggerUnixTime - the last-
+    // ACTED-ON trigger (shared between open and close; see ConfigStore.h's
+    // comment on why one field is enough) - not the fire window itself, so
+    // the "one or two consecutive polls" case above (or a reboot that lands
+    // back in the same window) doesn't double-fire. The trigger is always
+    // minute-quantized (seconds=0, see resolveUtcMinutes()), so comparing
+    // it whole rather than flooring "now" to a minute is both simpler and
+    // exact: identical polls against an unchanged schedule always resolve
+    // to the identical trigger and get skipped, while a schedule that shifts
+    // by even a minute, or tomorrow's occurrence of the same time-of-day,
+    // resolves to a different value and fires normally. This is entirely
+    // separate from cfg.lastOperationUnixTime - see DoorController.h - which
+    // DoorController stamps itself with the real move time, not this value.
+    uint32_t openTriggerUnix =
+        DateTime(now.year(), now.month(), now.day(), openMinutes / 60, openMinutes % 60, 0)
+            .unixtime();
+    uint32_t closeTriggerUnix =
+        DateTime(now.year(), now.month(), now.day(), closeMinutes / 60, closeMinutes % 60, 0)
+            .unixtime();
+    bool openIsNewTrigger = openTriggerUnix != cfg.lastTriggerUnixTime;
+    bool closeIsNewTrigger = closeTriggerUnix != cfg.lastTriggerUnixTime;
 
-    if (openDue) door.open(cfg);
-    if (closeDue) door.close(cfg);
+    TRACEF("[Scheduler] now=%02d:%02d:%02d UTC | open=%02d:%02d UTC due=%d newTrigger=%d | "
+           "close=%02d:%02d UTC due=%d newTrigger=%d",
+           nowMinutes / 60, nowMinutes % 60, now.second(), openMinutes / 60, openMinutes % 60,
+           openDue, openIsNewTrigger, closeMinutes / 60, closeMinutes % 60, closeDue,
+           closeIsNewTrigger);
+
+    // Sharing one field instead of one per action assumes open and close
+    // never resolve to the same trigger; if they ever are configured to the
+    // same time-of-day, whichever is checked first (open) wins and the
+    // other is treated as "already done" - not a supported configuration.
+    if (openDue && openIsNewTrigger) {
+        cfg.lastTriggerUnixTime = openTriggerUnix;
+        door.open(cfg);  // persists cfg, including the trigger line above
+    }
+    if (closeDue && closeIsNewTrigger) {
+        cfg.lastTriggerUnixTime = closeTriggerUnix;
+        door.close(cfg);  // persists cfg, including the trigger line above
+    }
 }
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
@@ -171,14 +214,9 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
     SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
 
-    int openTodayMin = resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                                          sunToday.sunriseMinutes, sunToday.valid, now, cfg.timezone);
-    int closeTodayMin = resolveUtcMinutes(cfg.closeMode, cfg.closeAbsMinutes,
-                                           cfg.closeSunOffsetMinutes, sunToday.sunsetMinutes,
-                                           sunToday.valid, now, cfg.timezone);
-    int openTomorrowMin =
-        resolveUtcMinutes(cfg.openMode, cfg.openAbsMinutes, cfg.openSunOffsetMinutes,
-                           sunTomorrow.sunriseMinutes, sunTomorrow.valid, tomorrow, cfg.timezone);
+    int openTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunToday, now);
+    int closeTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/false, sunToday, now);
+    int openTomorrowMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunTomorrow, tomorrow);
 
     // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
     // at the *next* occurrence of the given time-of-day, so a "today" value

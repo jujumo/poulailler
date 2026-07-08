@@ -48,8 +48,8 @@ void DoorController::run(Config& cfg, DoorAction action, bool rpwmHigh) {
     // Movement done but device is still awake - back to solid on.
     digitalWrite(PIN_STATUS_LED, HIGH);
 
-    cfg.lastEventAction = action;
-    cfg.lastEventUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
+    cfg.lastOperationAction = action;
+    cfg.lastOperationUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
     store_.save(cfg);
 
     TRACE(action == DoorAction::OPENED ? "[Door] opened" : "[Door] closed");

@@ -18,8 +18,8 @@ constexpr unsigned long kConfigPortalDurationMs = 5UL * 60UL * 1000UL;
 // brownout) rather than a clean deep-sleep wake - worth naming explicitly
 // since a brownout mid-move (the motor's current draw sagging the supply)
 // reroutes this boot into the 5-minute config portal instead of resuming
-// the schedule, and cfg.lastEventAction won't have advanced past whatever
-// completed before the interrupted move.
+// the schedule, and cfg.lastOperationAction won't have advanced past
+// whatever completed before the interrupted move.
 const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
     switch (cause) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
@@ -82,15 +82,15 @@ void setup() {
         TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, cfg.timezone);
         TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
                "%04d-%02d-%02d %02d:%02d:%02d local",
-               wakeCauseName(cause), doorActionName(cfg.lastEventAction),
-               static_cast<unsigned long>(cfg.lastEventUnixTime), utcNow.year(), utcNow.month(),
+               wakeCauseName(cause), doorActionName(cfg.lastOperationAction),
+               static_cast<unsigned long>(cfg.lastOperationUnixTime), utcNow.year(), utcNow.month(),
                utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second(), localNow.dt.year(),
                localNow.dt.month(), localNow.dt.day(), localNow.dt.hour(), localNow.dt.minute(),
                localNow.dt.second());
     } else {
         TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu, RTC time not valid (never set / lost power)",
-               wakeCauseName(cause), doorActionName(cfg.lastEventAction),
-               static_cast<unsigned long>(cfg.lastEventUnixTime));
+               wakeCauseName(cause), doorActionName(cfg.lastOperationAction),
+               static_cast<unsigned long>(cfg.lastOperationUnixTime));
     }
 #endif
 

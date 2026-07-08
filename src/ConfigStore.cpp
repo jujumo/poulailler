@@ -24,9 +24,10 @@ Config ConfigStore::load() {
     cfg.closeAbsMinutes = prefs.getUShort("closeAbsMin", cfg.closeAbsMinutes);
     cfg.closeSunOffsetMinutes = static_cast<int16_t>(prefs.getShort("closeSunOff", cfg.closeSunOffsetMinutes));
 
-    cfg.lastEventAction = static_cast<DoorAction>(
-        prefs.getUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction)));
-    cfg.lastEventUnixTime = prefs.getULong("lastEvtTime", cfg.lastEventUnixTime);
+    cfg.lastOperationAction = static_cast<DoorAction>(
+        prefs.getUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction)));
+    cfg.lastOperationUnixTime = prefs.getULong("lastOpTime", cfg.lastOperationUnixTime);
+    cfg.lastTriggerUnixTime = prefs.getULong("lastTrigger", cfg.lastTriggerUnixTime);
     cfg.motorRunMs = prefs.getULong("motorRunMs", cfg.motorRunMs);
     cfg.motorInvertDirection = prefs.getBool("motorInvertDir", cfg.motorInvertDirection);
 
@@ -52,8 +53,9 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUShort("closeAbsMin", cfg.closeAbsMinutes);
     prefs.putShort("closeSunOff", cfg.closeSunOffsetMinutes);
 
-    prefs.putUChar("lastEvtAction", static_cast<uint8_t>(cfg.lastEventAction));
-    prefs.putULong("lastEvtTime", cfg.lastEventUnixTime);
+    prefs.putUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction));
+    prefs.putULong("lastOpTime", cfg.lastOperationUnixTime);
+    prefs.putULong("lastTrigger", cfg.lastTriggerUnixTime);
     prefs.putULong("motorRunMs", cfg.motorRunMs);
     prefs.putBool("motorInvertDir", cfg.motorInvertDirection);
 

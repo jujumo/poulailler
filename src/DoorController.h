@@ -7,11 +7,14 @@
 // current sensing (R_IS/L_IS left unconnected).
 //
 // Always moves the motor when asked - it has no notion of "already there"
-// to skip against, and neither does Scheduler (see handleDueActions()):
-// whether to call open()/close() at all is purely "is now in today's
-// window", with no memory of whether it already ran. cfg.lastEventAction/
-// lastEventUnixTime is updated after a move completes purely as a
-// display-only history record, never consulted to decide whether to move.
+// to skip against; whether to call open()/close() at all, and when, is
+// entirely the caller's decision (see Scheduler::handleDueActions() and
+// WebPortal's Force Open/Close). After a move, self-timestamps via its own
+// RtcManager and records cfg.lastOperationAction (which) and
+// cfg.lastOperationUnixTime (when it REALLY happened) unconditionally,
+// regardless of caller - display-only, see ConfigStore.h. Never touches
+// cfg.lastTriggerUnixTime, which is Scheduler's own debounce bookkeeping,
+// not DoorController's concern.
 class DoorController {
 public:
     DoorController(ConfigStore& store, RtcManager& rtc);
