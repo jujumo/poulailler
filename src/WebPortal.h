@@ -28,6 +28,7 @@ private:
     void handleForceOpen();
     void handleForceClose();
     void handleSleepNow();
+    void handlePing();
     void redirectToRoot();
 
     String buildIndexHtml();

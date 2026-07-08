@@ -1,5 +1,18 @@
 #pragma once
 
+// The debug-log fieldset shown at the bottom of the page. Its *definition*
+// (not just its content) is compiled out entirely for a release build, so
+// -D DEBUG_TRACES is what controls whether it exists at all, not just
+// whether it has anything in it - see the {{DEBUG_LOG_SECTION}} placeholder
+// below and WebPortal::buildIndexHtml().
+#ifdef DEBUG_TRACES
+constexpr const char kDebugLogSectionTemplate[] = R"HTML(<fieldset><legend>Debug log (this wake cycle)</legend>
+<pre style='white-space:pre-wrap;word-break:break-all;max-height:300px;overflow:auto;background:#111;color:#0f0;padding:.5em;font-size:.75em;border-radius:4px'>{{DEBUG_LOG}}</pre>
+</fieldset>)HTML";
+#else
+constexpr const char kDebugLogSectionTemplate[] = "";
+#endif
+
 // The config page, as plain HTML. WebPortal::buildIndexHtml() fills the
 // {{PLACEHOLDER}} tokens in with the current config values and returns the
 // result; nothing here is ever read from a filesystem, it's compiled
@@ -13,9 +26,11 @@ input,select{width:100%;box-sizing:border-box;padding:.4em;margin-top:.2em}
 button{padding:.6em 1em;margin-top:.5em}
 .msg{background:#eef;padding:.5em;border-radius:4px;margin-bottom:1em}
 .force{background:#fee}
+.warn{display:none;background:#fee;border:1px solid #c00;color:#900;font-weight:bold;padding:.6em;border-radius:4px;margin-bottom:1em}
 </style></head><body>
 <h2>Coop Door Setup</h2>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
+<div id='moveWarn' class='warn'>&#9888; The door may be moving right now &mdash; this page can stop responding for up to {{MOTOR_RUN_MS}}ms while it does. It will recover on its own once the move finishes.</div>
 {{STATUS_BLOCK}}
 <form method='POST' action='/settime' onsubmit='return fillTime(this)'>
 <input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
@@ -61,10 +76,38 @@ button{padding:.6em 1em;margin-top:.5em}
 <form method='POST' action='/sleep' style='display:inline'><button type='submit'>Sleep now</button></form>
 <p>Last event: {{LAST_EVENT}}</p>
 </fieldset>
+{{DEBUG_LOG_SECTION}}
 <script>
 function fillTime(f){var d=new Date();
 f.y.value=d.getFullYear();f.mo.value=d.getMonth()+1;f.d.value=d.getDate();
 f.h.value=d.getHours();f.mi.value=d.getMinutes();f.s.value=d.getSeconds();
 return true;}
+
+// Heartbeat: an open/close (scheduled, or Force Open/Close below) blocks
+// this whole sketch's loop for the move's duration (see CLAUDE.md), so a
+// /ping that takes unusually long to answer is the only client-side signal
+// that a move is actually under way - there's no way for the server to push
+// that state, since it's the very thing that would be blocked from
+// responding, and no way to know from a button click alone whether the
+// move it triggers has actually started yet.
+(function(){
+    var warn = document.getElementById('moveWarn');
+    var inFlight = false;
+    function ping(){
+        if (inFlight) return;
+        inFlight = true;
+        var slow = false;
+        var timer = setTimeout(function(){ slow = true; warn.style.display = 'block'; }, 1500);
+        fetch('/ping').then(function(){
+            clearTimeout(timer);
+            inFlight = false;
+            if (slow) warn.style.display = 'none';
+        }).catch(function(){
+            clearTimeout(timer);
+            inFlight = false;
+        });
+    }
+    setInterval(ping, 3000);
+})();
 </script>
 </body></html>)HTML";

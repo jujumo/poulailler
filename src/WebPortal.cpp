@@ -9,6 +9,10 @@
 #include "WebPortalTemplate.h"
 #include "config.h"
 
+#ifdef DEBUG_TRACES
+#include "TraceLog.h"
+#endif
+
 namespace {
 
 constexpr const char* kApSsid = WIFI_AP_SSID;
@@ -149,6 +153,24 @@ String formatUtcOffset(int offsetMinutes, bool isDst) {
     return result;
 }
 
+#ifdef DEBUG_TRACES
+// The debug log is echoed into a <pre> block; escape it since some traced
+// lines (e.g. POST /save's raw-field dump) contain unescaped user input
+// from the form itself.
+String htmlEscapeTraceLog(const String& in) {
+    String out;
+    out.reserve(in.length());
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if (c == '&') out += "&amp;";
+        else if (c == '<') out += "&lt;";
+        else if (c == '>') out += "&gt;";
+        else out += c;
+    }
+    return out;
+}
+#endif
+
 String buildTimezoneOptions(const char* selected) {
     String options;
     for (size_t i = 0; i < kTimeZoneCount; i++) {
@@ -249,6 +271,10 @@ void WebPortal::setupRoutes() {
     server_.on("/force-open", HTTP_POST, [this]() { handleForceOpen(); });
     server_.on("/force-close", HTTP_POST, [this]() { handleForceClose(); });
     server_.on("/sleep", HTTP_POST, [this]() { handleSleepNow(); });
+    // Lightweight, no-op endpoint - see the page's heartbeat JS. Its only
+    // purpose is to be fast when the door isn't moving and to hang, like
+    // everything else on this loop, when it is.
+    server_.on("/ping", HTTP_GET, [this]() { handlePing(); });
     server_.onNotFound([this]() { redirectToRoot(); });
 }
 
@@ -314,6 +340,14 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{MOTOR_INVERT_CHECKED}}", cfg_.motorInvertDirection ? "checked" : "");
 
     html.replace("{{LAST_EVENT}}", formatLastEvent(cfg_));
+
+#ifdef DEBUG_TRACES
+    String debugSection(kDebugLogSectionTemplate);
+    debugSection.replace("{{DEBUG_LOG}}", htmlEscapeTraceLog(TraceLog::snapshot()));
+    html.replace("{{DEBUG_LOG_SECTION}}", debugSection);
+#else
+    html.replace("{{DEBUG_LOG_SECTION}}", "");
+#endif
 
     return html;
 }
@@ -436,6 +470,10 @@ void WebPortal::handleSetTime() {
     rtc_.setTime(TimeZone::toUtc(localWallClock, cfg_.timezone));
     statusMessage_ = "Time synced from this device.";
     redirectToRoot();
+}
+
+void WebPortal::handlePing() {
+    server_.send(200, "text/plain", "OK");
 }
 
 void WebPortal::handleForceOpen() {
