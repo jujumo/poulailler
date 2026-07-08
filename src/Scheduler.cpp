@@ -10,10 +10,21 @@
 
 namespace {
 
-// Wake window tolerance: deep-sleep wake isn't instant, and the fallback
-// timer wake can land a while after the "real" alarm would have.
-constexpr int kToleranceBeforeMin = -2;
-constexpr int kToleranceAfterMin = 10;
+// How early (before a computed open/close target) armNextAlarmAndSleep()
+// wakes the device via the DS3231 alarm, to absorb ESP32 boot/WiFi-bringup
+// latency - by the time the target actually arrives, WebPortal's poll loop
+// has already been running for a while, so handleDueActions() only needs a
+// tight window (below) rather than a wide post-hoc tolerance. Unrelated to
+// the multi-hour fallback timer wake, which stays a coarse safety net.
+constexpr int kWakeLeadMinutes = 2;
+
+// Fire tolerance for handleDueActions(), in seconds either side of the
+// target - a little wider than WebPortal's poll interval
+// (kScheduleCheckIntervalMs, 5s) so a target is never polled-past without
+// being caught, now that kWakeLeadMinutes above (not this) absorbs boot
+// latency.
+constexpr int kToleranceBeforeSec = -5;
+constexpr int kToleranceAfterSec = 5;
 
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
 constexpr uint64_t kFallbackSleepSeconds = 6ULL * 3600ULL;
@@ -26,9 +37,12 @@ int normalizeMinutes(int minutes) {
     return minutes;
 }
 
-bool inWindow(int nowMinutes, int targetMinutes) {
-    return nowMinutes >= targetMinutes + kToleranceBeforeMin &&
-           nowMinutes <= targetMinutes + kToleranceAfterMin;
+// Both arguments are seconds-of-day; target is always at :00 (open/close
+// targets are resolved to whole minutes), compared against "now" including
+// its seconds so the window can be tight.
+bool inWindow(int nowSeconds, int targetSeconds) {
+    return nowSeconds >= targetSeconds + kToleranceBeforeSec &&
+           nowSeconds <= targetSeconds + kToleranceAfterSec;
 }
 
 [[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool armExt0) {
@@ -100,8 +114,7 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
     return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
 }
 
-void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
-                       DueActionTracker* tracker) {
+void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
     if (!rtc.isTimeValid()) {
         // No valid time (never configured / lost power) - don't act on
         // garbage time. armNextAlarmAndSleep() will handle the short retry.
@@ -113,6 +126,7 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
     // rather than the other way around.
     DateTime now = rtc.now();
     int nowMinutes = now.hour() * 60 + now.minute();
+    int nowSeconds = nowMinutes * 60 + now.second();
 
     SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
 
@@ -122,35 +136,25 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
                                           cfg.closeSunOffsetMinutes, sun.sunsetMinutes, sun.valid,
                                           now, cfg.timezone);
 
-    // No "already done today" memory at all - purely "is now in the
-    // trigger window". DoorController itself has no gate either (see its
-    // comment), so this is the only thing standing between "it's time" and
-    // the motor running. That means a wake that lands twice in the same
-    // window (e.g. an overlapping fallback-timer wake) re-triggers the move
-    // each time - deliberate, per the request to drop the day-based
-    // bookkeeping entirely. The optional `tracker` is not that bookkeeping:
-    // it's an in-RAM-only debounce keyed on the resolved target minute, used
-    // by WebPortal's repeated same-session polling below (see
-    // DueActionTracker's comment in Scheduler.h).
-    bool openDue = inWindow(nowMinutes, openMinutes);
-    bool closeDue = inWindow(nowMinutes, closeMinutes);
+    // No "already done" memory at all - purely "is now within a few
+    // seconds of the trigger target". DoorController itself has no gate
+    // either (see its comment), so this is the only thing standing between
+    // "it's time" and the motor running. Safe to keep this simple because
+    // armNextAlarmAndSleep() wakes the device kWakeLeadMinutes before the
+    // target and WebPortal polls this every few seconds the whole time it's
+    // awake - by the time "now" actually lands in this tight window, it'll
+    // typically only do so for one or two consecutive polls before moving
+    // past it, rather than lingering there for many minutes.
+    bool openDue = inWindow(nowSeconds, openMinutes * 60);
+    bool closeDue = inWindow(nowSeconds, closeMinutes * 60);
 
-    bool openAlreadyFired = tracker != nullptr && tracker->lastOpenFiredMinutes == openMinutes;
-    bool closeAlreadyFired = tracker != nullptr && tracker->lastCloseFiredMinutes == closeMinutes;
+    TRACEF("[Scheduler] now=%02d:%02d:%02d UTC | open=%02d:%02d UTC due=%d | "
+           "close=%02d:%02d UTC due=%d",
+           nowMinutes / 60, nowMinutes % 60, now.second(), openMinutes / 60, openMinutes % 60,
+           openDue, closeMinutes / 60, closeMinutes % 60, closeDue);
 
-    TRACEF("[Scheduler] now=%02d:%02d UTC | open=%02d:%02d UTC due=%d skip=%d | "
-           "close=%02d:%02d UTC due=%d skip=%d",
-           nowMinutes / 60, nowMinutes % 60, openMinutes / 60, openMinutes % 60, openDue,
-           openAlreadyFired, closeMinutes / 60, closeMinutes % 60, closeDue, closeAlreadyFired);
-
-    if (openDue && !openAlreadyFired) {
-        door.open(cfg);
-        if (tracker != nullptr) tracker->lastOpenFiredMinutes = openMinutes;
-    }
-    if (closeDue && !closeAlreadyFired) {
-        door.close(cfg);
-        if (tracker != nullptr) tracker->lastCloseFiredMinutes = closeMinutes;
-    }
+    if (openDue) door.open(cfg);
+    if (closeDue) door.close(cfg);
 }
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
@@ -162,7 +166,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // Everything here runs in UTC - see handleDueActions().
     DateTime now = rtc.now();
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
-    int nowMinutes = now.hour() * 60 + now.minute();
+    int nowSeconds = (now.hour() * 60 + now.minute()) * 60 + now.second();
 
     SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
     SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
@@ -186,43 +190,59 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // earlier clock-time of the two, 08:00, would silently swallow today's
     // close). This is independent of whether either has already fired -
     // handleDueActions() has no memory of that, and neither does this.
-    bool openUpcoming = nowMinutes <= openTodayMin + kToleranceAfterMin;
-    bool closeUpcoming = nowMinutes <= closeTodayMin + kToleranceAfterMin;
+    bool openUpcoming = nowSeconds <= openTodayMin * 60 + kToleranceAfterSec;
+    bool closeUpcoming = nowSeconds <= closeTodayMin * 60 + kToleranceAfterSec;
 
     int nextMinute;
+    DateTime nextEventDay;
     if (openUpcoming && closeUpcoming) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
+        nextEventDay = now;
     } else if (openUpcoming) {
         nextMinute = openTodayMin;
+        nextEventDay = now;
     } else if (closeUpcoming) {
         nextMinute = closeTodayMin;
+        nextEventDay = now;
     } else {
         nextMinute = openTomorrowMin;
+        nextEventDay = tomorrow;
     }
 
-    uint8_t hh = static_cast<uint8_t>(nextMinute / 60);
-    uint8_t mm = static_cast<uint8_t>(nextMinute % 60);
+    DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(),
+                           nextMinute / 60, nextMinute % 60, 0);
+
+    // Wake kWakeLeadMinutes before the actual target rather than at the
+    // target itself, so ESP32 boot/WiFi-bringup latency happens before the
+    // target arrives instead of eating into handleDueActions()'s tight fire
+    // window (see its comment). Clamped to never be earlier than "now" -
+    // an alarm time in the past would make the DS3231's ignore-date match
+    // roll over to the *next* occurrence a full day later instead of firing
+    // shortly, silently missing today's event; this only bites when the
+    // target itself is already less than kWakeLeadMinutes away, in which
+    // case there's nothing to lead-in for anyway.
+    DateTime wakeAt = nextEventUtc - TimeSpan(60 * kWakeLeadMinutes);
+    if (wakeAt < now) wakeAt = now + TimeSpan(1);
 
 #ifdef DEBUG_TRACES
     // Runs on every boot right before going back to sleep, so this doubles
     // as the "what does the device think right now, and when will it next
     // wake up" boot trace.
-    DateTime nextEventDay = (openUpcoming || closeUpcoming) ? now : tomorrow;
-    DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(), hh, mm, 0);
     TimeZone::LocalTime nowLocal = TimeZone::toLocal(now, cfg.timezone);
     TimeZone::LocalTime nextEventLocal = TimeZone::toLocal(nextEventUtc, cfg.timezone);
     TRACEF("[Scheduler] RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / %04d-%02d-%02d %02d:%02d:%02d local",
            now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(),
            nowLocal.dt.year(), nowLocal.dt.month(), nowLocal.dt.day(), nowLocal.dt.hour(),
            nowLocal.dt.minute(), nowLocal.dt.second());
-    TRACEF("[Scheduler] next wake: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 local "
-           "(openUpcoming=%d closeUpcoming=%d)",
-           nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), hh, mm,
-           nextEventLocal.dt.year(), nextEventLocal.dt.month(), nextEventLocal.dt.day(),
-           nextEventLocal.dt.hour(), nextEventLocal.dt.minute(), openUpcoming, closeUpcoming);
+    TRACEF("[Scheduler] next event: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 "
+           "local (openUpcoming=%d closeUpcoming=%d) | waking at %02d:%02d:%02d UTC",
+           nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), nextEventUtc.hour(),
+           nextEventUtc.minute(), nextEventLocal.dt.year(), nextEventLocal.dt.month(),
+           nextEventLocal.dt.day(), nextEventLocal.dt.hour(), nextEventLocal.dt.minute(),
+           openUpcoming, closeUpcoming, wakeAt.hour(), wakeAt.minute(), wakeAt.second());
 #endif
 
-    rtc.setNextAlarm(hh, mm, 0);
+    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second());
     rtc.clearAlarm();
 
     goToSleep(kFallbackSleepSeconds, /*armExt0=*/true);

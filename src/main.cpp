@@ -66,7 +66,11 @@ void setup() {
     DoorController door(store, rtc);
     door.begin();
 
+    // Every wake - true reset, DS3231 alarm, or the fallback timer - takes
+    // the same path below (open the portal, then re-arm); `cause` only
+    // matters for tracing which one this was.
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    (void)cause;
 
 #ifdef DEBUG_TRACES
     // Printed immediately at boot, before the (potentially 5-minute-long)
@@ -90,17 +94,20 @@ void setup() {
     }
 #endif
 
-    if (cause == ESP_SLEEP_WAKEUP_UNDEFINED) {
-        // True power-on / reset / brownout: open the config portal.
-        WebPortal portal(store, rtc, door);
-        portal.run(kConfigPortalDurationMs);
-        cfg = store.load();  // portal may have changed it
-    } else {
-        // Woken by the DS3231 alarm (ext0) or the fallback timer.
-        rtc.clearAlarm();  // must happen before re-arming, see Scheduler
-        Scheduler::handleDueActions(cfg, rtc, door);
-    }
+    // Clear the alarm-fired flag right away regardless of wake cause - see
+    // the correctness rule in CLAUDE.md; must happen again immediately
+    // before every esp_deep_sleep_start() too (see Scheduler).
+    rtc.clearAlarm();
 
+    // There's no separate "just run the scheduler and go back to sleep"
+    // path: armNextAlarmAndSleep() now wakes the device kWakeLeadMinutes
+    // before an open/close target rather than at it (see Scheduler.cpp), so
+    // the portal's own periodic handleDueActions() poll (WebPortal::run())
+    // is what actually catches the target precisely, and running the
+    // portal on every wake means it's reachable without a manual reset.
+    WebPortal portal(store, rtc, door);
+    portal.run(kConfigPortalDurationMs);
+    cfg = store.load();  // portal may have changed it
 
     Scheduler::armNextAlarmAndSleep(cfg, rtc, store);  // never returns
 }

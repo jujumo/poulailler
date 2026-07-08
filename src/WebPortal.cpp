@@ -206,34 +206,30 @@ void WebPortal::run(unsigned long durationMs) {
     server_.begin();
 
     unsigned long start = millis();
+    // Checked once immediately (not just every kScheduleCheckIntervalMs
+    // below) since main.cpp now opens this portal on *every* wake,
+    // including a DS3231 alarm/fallback-timer wake that landed right on
+    // (or, thanks to Scheduler's wake-lead, shortly before) an open/close
+    // target - waiting a full interval before the first check would risk
+    // polling past handleDueActions()'s tight fire window before ever
+    // evaluating it.
+    Scheduler::handleDueActions(cfg_, rtc_, door_);
     unsigned long lastScheduleCheck = start;
-    // Session-local only - never a class member, never written to NVS/RTC -
-    // so it carries no memory across a sleep cycle and isn't a
-    // reintroduction of the removed day-based idempotency gates (see
-    // DoorController's and Scheduler's comments).
-    Scheduler::DueActionTracker dueActionTracker;
     while (millis() - start < durationMs) {
         dnsServer_.processNextRequest();
         if (httpsStub_.hasClient()) httpsStub_.accept().stop();
         server_.handleClient();
 
-        // The portal only ever opens after a true reset, so without this an
-        // open/close due to fire *during* this 5-minute window (e.g. a
-        // schedule saved moments ago for a few minutes out, or a reset that
-        // happens to land right on a due time) would be silently skipped
-        // until tomorrow - handleDueActions() otherwise only ever runs on
-        // the DS3231-alarm wake path. Throttled since it does RTC/I2C reads
-        // and sun-time math that don't need sub-second freshness.
-        //
-        // dueActionTracker is passed so a repeat poll landing on the same
-        // resolved target minute it already fired for is skipped instead of
-        // re-running the motor every kScheduleCheckIntervalMs for the whole
-        // ~12-minute window. Editing the schedule mid-session (e.g. /save)
-        // to a genuinely different resolved target still fires immediately,
-        // since the check compares the resolved value, not a boolean flag.
+        // Keeps catching newly-due opens/closes for the rest of the time
+        // the portal stays open (e.g. a schedule just saved for a few
+        // minutes out). Throttled since it does RTC/I2C reads and sun-time
+        // math that don't need sub-second freshness. handleDueActions()
+        // has no "already done" memory - see its comment for why the
+        // combination of a tight fire window and Scheduler's wake-lead
+        // makes that safe rather than a repeat-every-poll hazard.
         if (millis() - lastScheduleCheck >= kScheduleCheckIntervalMs) {
             lastScheduleCheck = millis();
-            Scheduler::handleDueActions(cfg_, rtc_, door_, &dueActionTracker);
+            Scheduler::handleDueActions(cfg_, rtc_, door_);
         }
 
         delay(2);
