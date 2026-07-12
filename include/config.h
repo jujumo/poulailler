@@ -16,8 +16,10 @@
 // BTS7960 (IBT-2) motor driver
 #define PIN_MOTOR_R_EN 26
 #define PIN_MOTOR_L_EN 27
-#define PIN_MOTOR_RPWM 33
-#define PIN_MOTOR_LPWM 25
+// RPWM/LPWM swapped vs. the driver's silkscreen so that "open"/"close" match
+// the physical door direction on this build - see DoorController::run().
+#define PIN_MOTOR_RPWM 25
+#define PIN_MOTOR_LPWM 33
 // R_IS / L_IS (current sense) intentionally left unconnected - not used.
 
 // LED indicator (blue LED on most ESP32 boards)

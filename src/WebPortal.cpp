@@ -416,6 +416,11 @@ void WebPortal::handleSaveConfig() {
         if (v > 0 && v <= 120000) next.motorRunMs = static_cast<uint32_t>(v); else ok = false;
     }
 
+    // A checkbox is only present in the POST when checked - its absence is
+    // the "unchecked" signal, so read it unconditionally rather than gating
+    // on hasArg (which would make it a set-only, never-cleared field).
+    next.motorInvertDirection = server_.hasArg("motorInvertDirection");
+
     if (!ok) {
         TRACE("[WebPortal] POST /save: rejected as invalid, nothing saved");
         server_.send(400, "text/plain", "Invalid input - nothing was saved. Go back and check the values.");
