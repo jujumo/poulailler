@@ -51,6 +51,11 @@ const char* doorActionName(DoorAction action) {
 // in RAM between cycles, so loop() is unused.
 void setup() {
     Serial.begin(115200);
+    unsigned long serialWaitStart = millis();
+    while (!Serial && millis() - serialWaitStart < 2000UL) {
+        delay(10);
+    }
+    Serial.println("Hello from Poulailler!"); 
 
     // Blink blue LED to indicate the ESP32 is awake
     pinMode(PIN_STATUS_LED, OUTPUT);

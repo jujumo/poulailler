@@ -1,29 +1,19 @@
 #pragma once
 
-// I2C to DS3231 (arduino-esp32 defaults)
-#define PIN_I2C_SDA 21
-#define PIN_I2C_SCL 22
-
-// DS3231 INT/SQW -> ESP32 deep-sleep wake source.
-// GPIO15 is RTC-capable (valid ext0 wakeup pin). It is a strapping pin
-// (MTDO, boot log verbosity only - not flash voltage or download mode),
-// so at worst a reset that lands while the RTC alarm is asserted will
-// silence that boot's serial log; it has no effect on wake/scheduling.
-// SQW is open-drain: make sure there is a pull-up to 3.3V (most DS3231
-// breakout boards already include one).
-#define PIN_RTC_INT GPIO_NUM_15
-
-// BTS7960 (IBT-2) motor driver
-#define PIN_MOTOR_R_EN 26
-#define PIN_MOTOR_L_EN 27
-// RPWM/LPWM swapped vs. the driver's silkscreen so that "open"/"close" match
-// the physical door direction on this build - see DoorController::run().
-#define PIN_MOTOR_RPWM 25
-#define PIN_MOTOR_LPWM 33
-// R_IS / L_IS (current sense) intentionally left unconnected - not used.
-
 // LED indicator (blue LED on most ESP32 boards)
-#define PIN_STATUS_LED 2
+#define PIN_STATUS_LED GPIO_NUM_15
+
+// DS3231 RTC clock
+#define PIN_RTC_SDA     GPIO_NUM_19
+#define PIN_RTC_SCL     GPIO_NUM_20
+#define PIN_RTC_SWQ     GPIO_NUM_1 // on ESP32-C6: 0-7
+
+// DRV883 motor driver
+#define PIN_MOTOR_IN1   GPIO_NUM_22
+#define PIN_MOTOR_IN2   GPIO_NUM_23
+#define PIN_MOTOR_SLEEP GPIO_NUM_21
+
+
 
 // WiFi access point served for 5 minutes right after power-on/reset.
 #define WIFI_AP_SSID "CoopDoor"

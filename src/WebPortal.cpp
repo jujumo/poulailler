@@ -467,7 +467,20 @@ void WebPortal::handleSetTime() {
     // The hidden form fields are the browser's local wall clock; the RTC
     // stores UTC, so convert using the configured timezone before writing.
     DateTime localWallClock(year, month, day, hour, minute, second);
-    rtc_.setTime(TimeZone::toUtc(localWallClock, cfg_.timezone));
+    DateTime utc = TimeZone::toUtc(localWallClock, cfg_.timezone);
+#ifdef DEBUG_TRACES
+    TRACEF("[Time] browser local=%04d-%02d-%02d %02d:%02d:%02d -> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d zone=%s",
+           localWallClock.year(), localWallClock.month(), localWallClock.day(), localWallClock.hour(),
+           localWallClock.minute(), localWallClock.second(), utc.year(), utc.month(), utc.day(),
+           utc.hour(), utc.minute(), utc.second(), cfg_.timezone);
+#endif
+    rtc_.setTime(utc);
+#ifdef DEBUG_TRACES
+    DateTime readBack = rtc_.now();
+    TRACEF("[Time] RTC read-back=%04d-%02d-%02d %02d:%02d:%02d valid=%d", readBack.year(),
+           readBack.month(), readBack.day(), readBack.hour(), readBack.minute(), readBack.second(),
+           rtc_.isTimeValid());
+#endif
     statusMessage_ = "Time synced from this device.";
     redirectToRoot();
 }

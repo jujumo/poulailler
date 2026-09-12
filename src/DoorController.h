@@ -3,9 +3,9 @@
 #include "ConfigStore.h"
 #include "RtcManager.h"
 
-// Owns the BTS7960 pins. Timed movement only - no limit switches, no
-// current sensing (R_IS/L_IS left unconnected).
-//
+// Owns the DRV883 pins. Timed movement only - no limit switches, no
+// current sensing 
+
 // Always moves the motor when asked - it has no notion of "already there"
 // to skip against; whether to call open()/close() at all, and when, is
 // entirely the caller's decision (see Scheduler::handleDueActions() and

@@ -8,10 +8,9 @@
 DoorController::DoorController(ConfigStore& store, RtcManager& rtc) : store_(store), rtc_(rtc) {}
 
 void DoorController::begin() {
-    pinMode(PIN_MOTOR_R_EN, OUTPUT);
-    pinMode(PIN_MOTOR_L_EN, OUTPUT);
-    pinMode(PIN_MOTOR_RPWM, OUTPUT);
-    pinMode(PIN_MOTOR_LPWM, OUTPUT);
+    pinMode(PIN_MOTOR_IN1, OUTPUT);
+    pinMode(PIN_MOTOR_IN2, OUTPUT);
+    pinMode(PIN_MOTOR_SLEEP, OUTPUT);
     stopMotor();
 }
 
@@ -20,15 +19,14 @@ void DoorController::open(Config& cfg) { run(cfg, DoorAction::OPENED, /*rpwmHigh
 void DoorController::close(Config& cfg) { run(cfg, DoorAction::CLOSED, /*rpwmHigh=*/false); }
 
 void DoorController::run(Config& cfg, DoorAction action, bool rpwmHigh) {
+    
     TRACE(action == DoorAction::OPENED ? "[Door] opening" : "[Door] closing");
-
-    digitalWrite(PIN_MOTOR_R_EN, HIGH);
-    digitalWrite(PIN_MOTOR_L_EN, HIGH);
+    
     // Direction: verify against actual wiring during hardware bring-up and
     // swap RPWM/LPWM below if "open" and "close" are reversed.
     bool invert = cfg.motorInvertDirection;
-    digitalWrite(PIN_MOTOR_RPWM, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? HIGH : LOW);
-    digitalWrite(PIN_MOTOR_LPWM, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? LOW : HIGH);
+    digitalWrite(PIN_MOTOR_IN1, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? HIGH : LOW);
+    digitalWrite(PIN_MOTOR_IN2, (rpwmHigh && !invert) || (!rpwmHigh && invert) ? LOW : HIGH);
 
     // Blink the status LED at 2Hz (250ms half-period) for the duration of
     // the move instead of a single blocking delay, so "door moving" is
@@ -56,8 +54,6 @@ void DoorController::run(Config& cfg, DoorAction action, bool rpwmHigh) {
 }
 
 void DoorController::stopMotor() {
-    digitalWrite(PIN_MOTOR_RPWM, LOW);
-    digitalWrite(PIN_MOTOR_LPWM, LOW);
-    digitalWrite(PIN_MOTOR_R_EN, LOW);
-    digitalWrite(PIN_MOTOR_L_EN, LOW);
+    digitalWrite(PIN_MOTOR_IN1, LOW);
+    digitalWrite(PIN_MOTOR_IN2, LOW);
 }

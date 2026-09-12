@@ -1,11 +1,30 @@
 #include "RtcManager.h"
 
+#include <Wire.h>
+
+#include "Debug.h"
+#include "config.h"
+
 bool RtcManager::begin() {
-    return rtc_.begin();
+    Wire.begin(PIN_RTC_SDA, PIN_RTC_SCL);
+    Wire.setTimeOut(100);
+    bool connected = rtc_.begin(&Wire);
+    TRACEF("[RTC] begin connected=%d", connected);
+    return connected;
 }
 
 bool RtcManager::isTimeValid() {
-    return !rtc_.lostPower();
+    if (rtc_.lostPower()) return false;
+
+    DateTime current = rtc_.now();
+    bool valid = current.year() >= 2020 && current.year() <= 2099 && current.month() >= 1 &&
+                 current.month() <= 12 && current.day() >= 1 && current.day() <= 31 &&
+                 current.hour() <= 23 && current.minute() <= 59 && current.second() <= 59;
+    if (!valid) {
+        TRACEF("[RTC] invalid read: %04d-%02d-%02d %02d:%02d:%02d", current.year(),
+               current.month(), current.day(), current.hour(), current.minute(), current.second());
+    }
+    return valid;
 }
 
 DateTime RtcManager::now() {

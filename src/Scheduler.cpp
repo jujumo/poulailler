@@ -45,13 +45,12 @@ bool inWindow(int nowSeconds, int targetSeconds) {
            nowSeconds <= targetSeconds + kToleranceAfterSec;
 }
 
-[[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool armExt0) {
+[[noreturn]] void goToSleep(uint64_t timerFallbackSeconds) {
     WiFi.mode(WIFI_OFF);
     // Turn off LED before going to sleep
     digitalWrite(PIN_STATUS_LED, LOW);
-    if (armExt0) {
-        esp_sleep_enable_ext0_wakeup(PIN_RTC_INT, 0);  // DS3231 INT asserts LOW
-    }
+    const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_HIGH;
+    esp_sleep_enable_ext1_wakeup(PIN_RTC_SWQ, level_mode);  // DS3231 INT asserts LOW
     esp_sleep_enable_timer_wakeup(timerFallbackSeconds * 1000000ULL);
     esp_deep_sleep_start();
     while (true) {
@@ -203,7 +202,7 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     if (!rtc.isTimeValid()) {
         // Can't compute a real schedule yet - retry soon, no point arming ext0.
-        goToSleep(kInvalidTimeRetrySeconds, /*armExt0=*/false);
+        goToSleep(kInvalidTimeRetrySeconds/*, armExt1=false*/);
     }
 
     // Everything here runs in UTC - see handleDueActions().
@@ -283,7 +282,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second());
     rtc.clearAlarm();
 
-    goToSleep(kFallbackSleepSeconds, /*armExt0=*/true);
+    goToSleep(kFallbackSleepSeconds/*, armExt0=true*/);
 }
 
 }  // namespace Scheduler

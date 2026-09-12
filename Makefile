@@ -27,9 +27,9 @@ clean:
 # lifecycle traces (WiFi up, client connect, settings saved, door
 # open/close) - see the esp32dev-debug env in platformio.ini.
 debug:
-	$(PIO) run -e esp32dev-debug
+	$(PIO) run -e dfrobot_firebeetle2_esp32c6-debug
 
 upload-debug:
-	$(PIO) run -e esp32dev-debug -t upload
+	$(PIO) run -e dfrobot_firebeetle2_esp32c6-debug -t upload
 
 flash-debug: upload-debug monitor
