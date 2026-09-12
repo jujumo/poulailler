@@ -49,7 +49,7 @@ bool inWindow(int nowSeconds, int targetSeconds) {
     WiFi.mode(WIFI_OFF);
     // Turn off LED before going to sleep
     digitalWrite(PIN_STATUS_LED, LOW);
-    const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_HIGH;
+    const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_LOW;
     esp_sleep_enable_ext1_wakeup(PIN_RTC_SWQ, level_mode);  // DS3231 INT asserts LOW
     esp_sleep_enable_timer_wakeup(timerFallbackSeconds * 1000000ULL);
     esp_deep_sleep_start();

@@ -25,7 +25,7 @@ public:
     void close(Config& cfg);
 
 private:
-    void run(Config& cfg, DoorAction action, bool rpwmHigh);
+    void run(Config& cfg, DoorAction action);
     void stopMotor();
 
     ConfigStore& store_;
