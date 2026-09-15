@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-PlatformIO/Arduino firmware for an ESP32-based automatic chicken coop door. It runs on battery with no internet access, keeps time via an external DS3231 RTC, and drives the door with a BTS7960 (IBT-2) H-bridge motor driver. The door opens/closes on a schedule that is either a fixed clock time or an offset from a locally-computed sunrise/sunset. Configuration is done through a WiFi access point + web page that is served for 5 minutes on *every* wake (power-on/reset, DS3231 alarm, or fallback timer) — the rest of the time the device is in deep sleep, woken by the DS3231 a couple of minutes ahead of the next open/close target so it's up and polling well before the target actually arrives (see `Scheduler`).
+PlatformIO/Arduino firmware for an ESP32-based automatic chicken coop door. It runs on battery with no internet access, keeps time via an external DS3231 RTC, and drives the door with a BTS7960 (IBT-2) H-bridge motor driver. The door opens/closes on a schedule that is either a fixed clock time or an offset from a locally-computed sunrise/sunset. Configuration is done through a WiFi access point + web page that is served for 5 minutes on reset, setup, debug, and other non-scheduled wakes. Scheduled door-action wakes skip WiFi, perform the due action, and return to deep sleep (see `Scheduler`).
 
 See `README.md` for wiring, flashing, and bring-up/configuration steps.
 
@@ -25,9 +25,19 @@ There is no automated test target — sunrise/sunset math is delegated to the `D
 
 ## Architecture
 
-`src/main.cpp` is a thin dispatcher, not a stateful program: on every boot it clears the DS3231 alarm flag, runs `WebPortal` (the config AP) for 5 minutes regardless of `esp_sleep_get_wakeup_cause()`, then always ends in deep sleep via `Scheduler::armNextAlarmAndSleep()`, which never returns. `loop()` is intentionally empty — deep-sleep wake re-enters `setup()` from scratch, so **no state may live in RAM/globals across a sleep cycle**; everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
+### Current wake and action routing
 
-`esp_sleep_get_wakeup_cause()` is only used for tracing (`UNDEFINED` = true power-on/reset/brownout; `EXT0` = DS3231 alarm; `TIMER` = fallback safety net) — every cause takes the identical path below. There is no "just run the scheduler and go back to sleep" shortcut any more: the actual open/close firing happens inside `WebPortal::run()`'s periodic `Scheduler::handleDueActions()` poll (see `WebPortal` below), not in `main.cpp` directly. This means WiFi comes up on every wake, not just after a reset — a deliberate tradeoff of always-reachable config/force-open/close/debug routes against battery life; see `Scheduler` for how `armNextAlarmAndSleep()` compensates by waking a couple of minutes ahead of a target rather than needing the AP to already be up and polling by the exact moment.
+`AlarmOperateDoor` and `AlarmWifiUp` are independent retained wake fields.
+`AlarmOperateDoor` can request open, close, or no operation; `AlarmWifiUp`
+selects whether a separate WiFi-only wake follows. Door operation always has
+priority and never runs in a WiFi session. Scheduled alarms carry the selected
+door operation and no WiFi; web Open, Close, and Nap requests arm a one-second door wake with
+WiFi requested as the next stage. A WiFi-only wake runs the portal until timeout
+or a user command, then arms the next scheduled door alarm.
+
+`src/main.cpp` is a thin dispatcher, not a stateful program: on every boot it clears the DS3231 alarm flag, performs any retained door operation without WiFi, then either schedules a separate WiFi-only wake or starts the portal. After the portal times out, it arms the next scheduled door alarm. `loop()` is intentionally empty — deep-sleep wake re-enters `setup()` from scratch, so **no state may live in RAM/globals across a sleep cycle**; everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
+
+`esp_sleep_get_wakeup_cause()` is traced (`UNDEFINED` = power-on/reset/brownout; `EXT1` = DS3231 alarm; `TIMER` = fallback safety net), while `AlarmOperateDoor` and `AlarmWifiUp` control the staged work. Door operation always takes priority. WiFi is only started during a WiFi-only wake, and the next scheduled door alarm is armed when that session ends.
 
 Modules (`src/`), each with a single responsibility:
 - `ConfigStore` — wraps `Preferences` (ESP32 NVS), namespace `doorcfg`. Owns the `Config` struct and its defaults; getters always pass an explicit default so a first-boot/corrupt-NVS namespace degrades safely rather than needing special-case handling elsewhere.

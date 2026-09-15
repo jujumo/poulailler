@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "config.h"
+
 enum class ScheduleMode : uint8_t {
     ABSOLUTE = 0,
     SUN_OFFSET = 1,
@@ -62,7 +64,8 @@ struct Config {
     // Scheduler checks first fires; not a supported configuration.
     uint32_t lastTriggerUnixTime = 0;  // UTC unix time; 0 = never
 
-    uint32_t motorRunMs = 3500;
+    uint32_t motorOpenDurationMs = kMotorOpenDurationMs;
+    uint32_t motorCloseDurationMs = kMotorCloseDurationMs;
     bool motorInvertDirection = false;  // swap open/close PWM direction
 
     bool configured = false;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // LED indicator (blue LED on most ESP32 boards)
 #define PIN_STATUS_LED GPIO_NUM_15
 
@@ -13,6 +15,8 @@
 #define PIN_MOTOR_IN2   GPIO_NUM_23
 #define PIN_MOTOR_SLEEP GPIO_NUM_21
 
+constexpr uint32_t kMotorCloseDurationMs = 3500;
+constexpr uint32_t kMotorOpenDurationMs = 4500;
 
 
 // WiFi access point served for 5 minutes right after power-on/reset.

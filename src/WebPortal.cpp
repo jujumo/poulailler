@@ -19,11 +19,6 @@ constexpr const char* kApSsid = WIFI_AP_SSID;
 constexpr const char* kApPassword = WIFI_AP_PASSWORD;
 const IPAddress kApIp(192, 168, 4, 1);
 
-// How often WebPortal::run()'s loop re-checks whether an open/close is due
-// while the portal is open - see the call site for why this needs to
-// happen at all.
-constexpr unsigned long kScheduleCheckIntervalMs = 5000;
-
 // Parses "HH:MM" into minutes-since-midnight. Returns -1 on malformed input.
 int parseHhMmToMinutes(const String& value) {
     int colon = value.indexOf(':');
@@ -182,10 +177,10 @@ String buildTimezoneOptions(const char* selected) {
 
 }  // namespace
 
-WebPortal::WebPortal(ConfigStore& store, RtcManager& rtc, DoorController& door)
-    : store_(store), rtc_(rtc), door_(door), server_(80), httpsStub_(443) {}
+WebPortal::WebPortal(ConfigStore& store, RtcManager& rtc)
+    : store_(store), rtc_(rtc), server_(80), httpsStub_(443) {}
 
-void WebPortal::run(unsigned long durationMs) {
+WebPortalRequest WebPortal::run(unsigned long durationMs) {
     cfg_ = store_.load();
 
     WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) { TRACE("[WiFi] client connected"); },
@@ -223,32 +218,11 @@ void WebPortal::run(unsigned long durationMs) {
     server_.begin();
 
     unsigned long start = millis();
-    // Checked once immediately (not just every kScheduleCheckIntervalMs
-    // below) since main.cpp now opens this portal on *every* wake,
-    // including a DS3231 alarm/fallback-timer wake that landed right on
-    // (or, thanks to Scheduler's wake-lead, shortly before) an open/close
-    // target - waiting a full interval before the first check would risk
-    // polling past handleDueActions()'s tight fire window before ever
-    // evaluating it.
-    Scheduler::handleDueActions(cfg_, rtc_, door_);
-    unsigned long lastScheduleCheck = start;
-    while (millis() - start < durationMs) {
+        while (millis() - start < durationMs && !stopRequested_ &&
+            request_ == WebPortalRequest::NONE) {
         dnsServer_.processNextRequest();
         if (httpsStub_.hasClient()) httpsStub_.accept().stop();
         server_.handleClient();
-
-        // Keeps catching newly-due opens/closes for the rest of the time
-        // the portal stays open (e.g. a schedule just saved for a few
-        // minutes out). Throttled since it does RTC/I2C reads and sun-time
-        // math that don't need sub-second freshness. handleDueActions()
-        // has no "already done" memory - see its comment for why the
-        // combination of a tight fire window and Scheduler's wake-lead
-        // makes that safe rather than a repeat-every-poll hazard.
-        if (millis() - lastScheduleCheck >= kScheduleCheckIntervalMs) {
-            lastScheduleCheck = millis();
-            Scheduler::handleDueActions(cfg_, rtc_, door_);
-        }
-
         delay(2);
     }
 
@@ -257,6 +231,7 @@ void WebPortal::run(unsigned long durationMs) {
     dnsServer_.stop();
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
+    return request_;
 }
 
 void WebPortal::setupRoutes() {
@@ -266,6 +241,7 @@ void WebPortal::setupRoutes() {
     server_.on("/force-open", HTTP_POST, [this]() { handleForceOpen(); });
     server_.on("/force-close", HTTP_POST, [this]() { handleForceClose(); });
     server_.on("/sleep", HTTP_POST, [this]() { handleSleepNow(); });
+    server_.on("/nap", HTTP_POST, [this]() { handleNapNow(); });
     // Lightweight, no-op endpoint - see the page's heartbeat JS. Its only
     // purpose is to be fast when the door isn't moving and to hang, like
     // everything else on this loop, when it is.
@@ -302,8 +278,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{UTC_TIME}}", utcBuf);
     html.replace("{{LOCAL_TIME}}", localBuf);
     html.replace("{{TIMEZONE_NAME}}", cfg_.timezone);
-    html.replace("{{NOW_SUFFIX}}",
-                 rtc_.isTimeValid() ? "" : "<p class='msg'>RTC not set - please sync below.</p>");
+    html.replace("{{NOW_SUFFIX}}", rtc_.isTimeValid()
+                                      ? ""
+                                      : "<p class='rtc-alert'>RTC INVALID: set the time before the device can sleep or schedule the door.</p>");
 
     html.replace("{{LAT}}", String(cfg_.lat, 4));
     html.replace("{{LON}}", String(cfg_.lon, 4));
@@ -331,7 +308,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{CLOSE_UTC}}", closeResolved.utc);
     html.replace("{{CLOSE_LOCAL}}", closeResolved.local);
 
-    html.replace("{{MOTOR_RUN_MS}}", String(cfg_.motorRunMs));
+    html.replace("{{MOTOR_OPEN_MS}}", String(cfg_.motorOpenDurationMs));
+    html.replace("{{MOTOR_CLOSE_MS}}", String(cfg_.motorCloseDurationMs));
+    html.replace("{{MOTOR_MAX_RUN_MS}}", String(max(cfg_.motorOpenDurationMs, cfg_.motorCloseDurationMs)));
     html.replace("{{MOTOR_INVERT_CHECKED}}", cfg_.motorInvertDirection ? "checked" : "");
 
     html.replace("{{LAST_EVENT}}", formatLastEvent(cfg_));
@@ -361,11 +340,11 @@ void WebPortal::handleSaveConfig() {
     // save that silently does nothing can be told apart from "the request
     // never reached this handler" vs. "it arrived but got rejected below".
     TRACEF("[WebPortal] POST /save: openMode=%s openAbs=%s openSunOff=%s closeMode=%s closeAbs=%s "
-           "closeSunOff=%s motorRunMs=%s",
+           "closeSunOff=%s motorOpenMs=%s motorCloseMs=%s",
            server_.arg("openMode").c_str(), server_.arg("openAbs").c_str(),
            server_.arg("openSunOff").c_str(), server_.arg("closeMode").c_str(),
            server_.arg("closeAbs").c_str(), server_.arg("closeSunOff").c_str(),
-           server_.arg("motorRunMs").c_str());
+           server_.arg("motorOpenMs").c_str(), server_.arg("motorCloseMs").c_str());
 #endif
 
     if (server_.hasArg("lat")) {
@@ -411,9 +390,13 @@ void WebPortal::handleSaveConfig() {
         if (v >= -720 && v <= 720) next.closeSunOffsetMinutes = static_cast<int16_t>(v); else ok = false;
     }
 
-    if (server_.hasArg("motorRunMs")) {
-        long v = server_.arg("motorRunMs").toInt();
-        if (v > 0 && v <= 120000) next.motorRunMs = static_cast<uint32_t>(v); else ok = false;
+    if (server_.hasArg("motorOpenMs")) {
+        long v = server_.arg("motorOpenMs").toInt();
+        if (v > 0 && v <= 120000) next.motorOpenDurationMs = static_cast<uint32_t>(v); else ok = false;
+    }
+    if (server_.hasArg("motorCloseMs")) {
+        long v = server_.arg("motorCloseMs").toInt();
+        if (v > 0 && v <= 120000) next.motorCloseDurationMs = static_cast<uint32_t>(v); else ok = false;
     }
 
     // A checkbox is only present in the POST when checked - its absence is
@@ -464,15 +447,13 @@ void WebPortal::handleSetTime() {
         return;
     }
 
-    // The hidden form fields are the browser's local wall clock; the RTC
-    // stores UTC, so convert using the configured timezone before writing.
-    DateTime localWallClock(year, month, day, hour, minute, second);
-    DateTime utc = TimeZone::toUtc(localWallClock, cfg_.timezone);
+    // The hidden form fields are the browser's UTC clock; the RTC also stores
+    // UTC, so no timezone or DST conversion belongs in this path.
+    DateTime utc(year, month, day, hour, minute, second);
 #ifdef DEBUG_TRACES
-    TRACEF("[Time] browser local=%04d-%02d-%02d %02d:%02d:%02d -> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d zone=%s",
-           localWallClock.year(), localWallClock.month(), localWallClock.day(), localWallClock.hour(),
-           localWallClock.minute(), localWallClock.second(), utc.year(), utc.month(), utc.day(),
-           utc.hour(), utc.minute(), utc.second(), cfg_.timezone);
+    TRACEF("[Time] browser UTC=%04d-%02d-%02d %02d:%02d:%02d -> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d",
+           year, month, day, hour, minute, second, utc.year(), utc.month(), utc.day(), utc.hour(),
+           utc.minute(), utc.second());
 #endif
     rtc_.setTime(utc);
 #ifdef DEBUG_TRACES
@@ -490,32 +471,41 @@ void WebPortal::handlePing() {
 }
 
 void WebPortal::handleForceOpen() {
-    door_.open(cfg_);  // DoorController self-timestamps lastOperationAction/lastOperationUnixTime
-    statusMessage_ = "Door forced open.";
-    redirectToRoot();
+    if (!rtc_.isTimeValid()) {
+        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
+        return;
+    }
+    TRACE("[WebPortal] open requested");
+    request_ = WebPortalRequest::FORCE_OPEN;
+    server_.send(200, "text/plain", "Waking in 2 seconds to open the door.");
 }
 
 void WebPortal::handleForceClose() {
-    door_.close(cfg_);  // DoorController self-timestamps lastOperationAction/lastOperationUnixTime
-    statusMessage_ = "Door forced closed.";
-    redirectToRoot();
+    if (!rtc_.isTimeValid()) {
+        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
+        return;
+    }
+    TRACE("[WebPortal] close requested");
+    request_ = WebPortalRequest::FORCE_CLOSE;
+    server_.send(200, "text/plain", "Waking in 2 seconds to close the door.");
 }
 
-// Debug aid: skip the rest of the 5-minute portal window and go straight to
-// deep sleep, so a real DS3231-alarm/ext0 wake can be exercised without
-// waiting out the timer - useful for verifying the awake/asleep cycle
-// itself rather than the scheduling logic. armNextAlarmAndSleep() is
-// [[noreturn]] (ends in esp_deep_sleep_start()), so nothing after this call
-// - including WebPortal::run()'s own loop - ever executes again this boot.
 void WebPortal::handleSleepNow() {
+    if (!rtc_.isTimeValid()) {
+        server_.send(409, "text/plain", "RTC invalid - the device will remain awake until time is synced.");
+        return;
+    }
     TRACE("[WebPortal] manual sleep requested");
+    stopRequested_ = true;
     server_.send(200, "text/plain", "Going to sleep now.");
-    delay(50);  // best-effort: give the response a chance to leave the socket before WiFi drops
+}
 
-    httpsStub_.stop();
-    server_.stop();
-    dnsServer_.stop();
-    WiFi.softAPdisconnect(true);
-
-    Scheduler::armNextAlarmAndSleep(cfg_, rtc_, store_);  // never returns
+void WebPortal::handleNapNow() {
+    if (!rtc_.isTimeValid()) {
+        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
+        return;
+    }
+    TRACE("[WebPortal] manual nap-and-open requested");
+    request_ = WebPortalRequest::NAP;
+    server_.send(200, "text/plain", "Napping for 1 second, then opening.");
 }

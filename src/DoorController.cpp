@@ -17,9 +17,30 @@ void DoorController::begin() {
            digitalRead(PIN_MOTOR_IN1), digitalRead(PIN_MOTOR_IN2));
 }
 
+void DoorController::signalReady(const Config& cfg) {
+    constexpr unsigned long kSignalPulseMs = 100;
+
+    for (int pulse = 0; pulse < 2; ++pulse) {
+        setDirection(DoorAction::OPENED, cfg.motorInvertDirection);
+        delay(kSignalPulseMs);
+        stopMotor();
+
+        setDirection(DoorAction::CLOSED, cfg.motorInvertDirection);
+        delay(kSignalPulseMs);
+        stopMotor();
+    }
+}
+
 void DoorController::open(Config& cfg) { run(cfg, DoorAction::OPENED); }
 
 void DoorController::close(Config& cfg) { run(cfg, DoorAction::CLOSED); }
+
+void DoorController::setDirection(DoorAction action, bool invert) {
+    bool directionHigh = action == DoorAction::OPENED;
+    bool driveHigh = (directionHigh && !invert) || (!directionHigh && invert);
+    digitalWrite(PIN_MOTOR_IN1, driveHigh ? HIGH : LOW);
+    digitalWrite(PIN_MOTOR_IN2, driveHigh ? LOW : HIGH);
+}
 
 void DoorController::run(Config& cfg, DoorAction action) {
     
@@ -27,20 +48,20 @@ void DoorController::run(Config& cfg, DoorAction action) {
     
     // Direction: verify against actual wiring during hardware bring-up and
     // swap RPWM/LPWM below if "open" and "close" are reversed.
-    bool invert = cfg.motorInvertDirection;
-    bool directionHigh = action == DoorAction::OPENED;
-    digitalWrite(PIN_MOTOR_IN1, (directionHigh && !invert) || (!directionHigh && invert) ? HIGH : LOW);
-    digitalWrite(PIN_MOTOR_IN2, (directionHigh && !invert) || (!directionHigh && invert) ? LOW : HIGH);
+    setDirection(action, cfg.motorInvertDirection);
         TRACEF("[Door] command sleep=%d in1=%d in2=%d runMs=%lu", digitalRead(PIN_MOTOR_SLEEP),
             digitalRead(PIN_MOTOR_IN1), digitalRead(PIN_MOTOR_IN2),
-            static_cast<unsigned long>(cfg.motorRunMs));
+            static_cast<unsigned long>(action == DoorAction::OPENED ? cfg.motorOpenDurationMs
+                                                                      : cfg.motorCloseDurationMs));
 
     // Blink the status LED at 2Hz (250ms half-period) for the duration of
     // the move instead of a single blocking delay, so "door moving" is
     // visible without pulling in a timer/thread.
     constexpr unsigned long kBlinkHalfPeriodMs = 250;
     bool ledOn = true;
-    for (unsigned long remaining = cfg.motorRunMs; remaining > 0;) {
+    unsigned long remaining = action == DoorAction::OPENED ? cfg.motorOpenDurationMs
+                                                            : cfg.motorCloseDurationMs;
+    for (; remaining > 0;) {
         unsigned long step = remaining < kBlinkHalfPeriodMs ? remaining : kBlinkHalfPeriodMs;
         delay(step);
         remaining -= step;

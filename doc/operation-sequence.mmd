@@ -1,65 +1,24 @@
-sequenceDiagram
-    autonumber
-    participant HW as DS3231 / Timer<br/>(wake source)
-    participant Main as main.cpp
-    participant RTC as RtcManager
-    participant Cfg as ConfigStore (NVS)
-    participant Portal as WebPortal
-    participant Sched as Scheduler
-    participant Door as DoorController
+flowchart TD
+    A[setup starts] --> B[Load config, RTC, and saved flags]
+    B --> C{Door action requested?}
 
-    loop every wake cycle (reset / EXT0 / TIMER)
-        HW ->> Main: wake (re-enters setup())
-        Main ->> RTC: clearAlarm()
-        note right of Main: must happen here AND before every<br/>deep sleep, or INT stays asserted<br/>and EXT0 re-wakes instantly
-        Main ->> Cfg: load() -> cfg
-        Main ->> RTC: begin()
-        Main ->> Door: begin()
+    C -->|Yes| D[Perform open or close action]
+    D --> E{Was this a debug action with WiFi requested?}
 
-        Main ->> Portal: run(5 min)
-        activate Portal
-        Portal ->> Portal: start SoftAP + DNS + HTTP server
+    E -->|Yes| F[Keep WiFi request active]
+    E -->|No| G[Clear WiFi request]
 
-        Portal ->> Sched: handleDueActions(cfg, rtc, door)
-        note right of Portal: called once immediately on entry,<br/>so a wake landing on the wake-lead<br/>window is caught before the first poll delay
-        activate Sched
-        Sched ->> RTC: now()
-        Sched ->> Sched: resolveUtcMinutes(open), resolveUtcMinutes(close)<br/>(sun-offset via Dusk2Dawn, or local-abs -> UTC)
-        alt now within a few seconds of open target
-            Sched ->> Door: open(cfg)
-            Door ->> Door: drive BTS7960 for motorRunMs
-            Door ->> Cfg: save cfg (lastEventAction=OPENED, lastEventUnixTime)
-            note right of Door: display-only history —<br/>never read back to gate a decision
-        else now within a few seconds of close target
-            Sched ->> Door: close(cfg)
-            Door ->> Door: drive BTS7960 for motorRunMs
-            Door ->> Cfg: save cfg (lastEventAction=CLOSED, lastEventUnixTime)
-        else not due
-            Sched -->> Portal: no-op
-        end
-        deactivate Sched
+    C -->|No| H[WiFi request must be active]
+    H --> I[Serve WiFi]
+    I --> J[Consume WiFi request]
 
-        loop every 5s, for the rest of the 5-minute window
-            Portal ->> Portal: serve HTTP: "/", /save, /settime,<br/>/force-open, /force-close, /sleep
-            note over Portal,Door: /force-open and /force-close call<br/>Door directly, bypassing Scheduler entirely
-            Portal ->> Sched: handleDueActions(cfg, rtc, door)
-            Sched -->> Portal: (fires Door.open/close if due, as above)
-        end
+    F --> K{WiFi request active?}
+    G --> K
+    J --> K
 
-        Portal -->> Main: window elapsed (or /sleep hit early)
-        deactivate Portal
+    K -->|Yes| L[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
+    L --> M[Go to sleep: now + 2 seconds]
 
-        Main ->> Cfg: load() -> cfg
-        note right of Main: reload — the portal may have<br/>changed it via /save
-
-        Main ->> Sched: armNextAlarmAndSleep(cfg, rtc, store)
-        activate Sched
-        Sched ->> RTC: now()
-        Sched ->> Sched: pick soonest of {today's remaining open,<br/>today's remaining close, tomorrow's open}
-        Sched ->> RTC: setNextAlarm(wakeAt = target - kWakeLeadMinutes)
-        Sched ->> RTC: clearAlarm()
-        Sched ->> HW: esp_sleep_enable_ext0_wakeup() +<br/>esp_sleep_enable_timer_wakeup(6h fallback)
-        Sched ->> HW: esp_deep_sleep_start()
-        deactivate Sched
-        note over Main,HW: noreturn — device is now asleep,<br/>next event re-enters this loop at the top
-    end
+    K -->|No| N[Compute next door event]
+    N --> O[Set alarm: next open or close<br/>Flags: door action active, WiFi inactive]
+    O --> P[Go to sleep: next door event]

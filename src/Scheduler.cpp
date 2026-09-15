@@ -10,26 +10,14 @@
 
 namespace {
 
-// How early (before a computed open/close target) armNextAlarmAndSleep()
-// wakes the device via the DS3231 alarm, to absorb ESP32 boot/WiFi-bringup
-// latency - by the time the target actually arrives, WebPortal's poll loop
-// has already been running for a while, so handleDueActions() only needs a
-// tight window (below) rather than a wide post-hoc tolerance. Unrelated to
-// the multi-hour fallback timer wake, which stays a coarse safety net.
-constexpr int kWakeLeadMinutes = 2;
-
-// Fire tolerance for handleDueActions(), in seconds either side of the
-// target - a little wider than WebPortal's poll interval
-// (kScheduleCheckIntervalMs, 5s) so a target is never polled-past without
-// being caught, now that kWakeLeadMinutes above (not this) absorbs boot
-// latency.
+// Fire tolerance for scheduled handleDueActions() calls. Portal polling and
+// scheduled alarms both need a small window around the target.
 constexpr int kToleranceBeforeSec = -5;
 constexpr int kToleranceAfterSec = 5;
 
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
 constexpr uint64_t kFallbackSleepSeconds = 6ULL * 3600ULL;
-// RTC has no valid time yet - retry soon, but don't busy-loop.
-constexpr uint64_t kInvalidTimeRetrySeconds = 600ULL;
+constexpr uint64_t kDebugSleepFallbackSeconds = 60ULL;
 
 int normalizeMinutes(int minutes) {
     minutes %= 1440;
@@ -45,12 +33,17 @@ bool inWindow(int nowSeconds, int targetSeconds) {
            nowSeconds <= targetSeconds + kToleranceAfterSec;
 }
 
-[[noreturn]] void goToSleep(uint64_t timerFallbackSeconds) {
+[[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool enableRtcWakeup) {
     WiFi.mode(WIFI_OFF);
     // Turn off LED before going to sleep
     digitalWrite(PIN_STATUS_LED, LOW);
-    const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_LOW;
-    esp_sleep_enable_ext1_wakeup(PIN_RTC_SWQ, level_mode);  // DS3231 INT asserts LOW
+    if (enableRtcWakeup) {
+        const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_LOW;
+        esp_sleep_enable_ext1_wakeup(1ULL << PIN_RTC_SWQ, level_mode);
+        // ESP32-C6 EXT1 takes a GPIO bitmask; DS3231 INT asserts LOW.
+    } else {
+        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
+    }
     esp_sleep_enable_timer_wakeup(timerFallbackSeconds * 1000000ULL);
     esp_deep_sleep_start();
     while (true) {
@@ -126,7 +119,19 @@ int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
                               utcDay, cfg.timezone);
 }
 
-void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
+void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
+                      DoorAction requestedAction) {
+    if (requestedAction == DoorAction::OPENED) {
+        TRACE("[Scheduler] explicit open action");
+        door.open(cfg);
+        return;
+    }
+    if (requestedAction == DoorAction::CLOSED) {
+        TRACE("[Scheduler] explicit close action");
+        door.close(cfg);
+        return;
+    }
+
     if (!rtc.isTimeValid()) {
         // No valid time (never configured / lost power) - don't act on
         // garbage time. armNextAlarmAndSleep() will handle the short retry.
@@ -145,15 +150,8 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
     int openMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/true, sun, now);
     int closeMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/false, sun, now);
 
-    // Purely "is now within a few seconds of the trigger target" - DoorController
-    // itself still has no gate (see its comment), so combined with the debounce
-    // below, this is the only thing standing between "it's time" and the motor
-    // running. Safe to keep this simple because armNextAlarmAndSleep() wakes the
-    // device kWakeLeadMinutes before the target and WebPortal polls this every
-    // few seconds the whole time it's awake - by the time "now" actually lands
-    // in this tight window, it'll typically only do so for one or two
-    // consecutive polls before moving past it, rather than lingering there for
-    // many minutes.
+    // Scheduled actions use a tight time window. Explicit one-shot actions
+    // bypass that window but still dispatch through this scheduler-owned path.
     bool openDue = inWindow(nowSeconds, openMinutes * 60);
     bool closeDue = inWindow(nowSeconds, closeMinutes * 60);
 
@@ -201,8 +199,10 @@ void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door) {
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     if (!rtc.isTimeValid()) {
-        // Can't compute a real schedule yet - retry soon, no point arming ext0.
-        goToSleep(kInvalidTimeRetrySeconds/*, armExt1=false*/);
+        // Without a valid RTC there is no meaningful scheduled event to arm.
+        // Keep the session invariant by requesting an immediate WiFi service
+        // wake so the user can set the clock.
+        sleepForWifi(rtc, 1);
     }
 
     // Everything here runs in UTC - see handleDueActions().
@@ -231,35 +231,33 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     bool closeUpcoming = nowSeconds <= closeTodayMin * 60 + kToleranceAfterSec;
 
     int nextMinute;
+    AlarmOperateDoor nextOperation;
     DateTime nextEventDay;
     if (openUpcoming && closeUpcoming) {
         nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
+        nextOperation = (openTodayMin < closeTodayMin) ? AlarmOperateDoor::door_open
+                                                        : AlarmOperateDoor::door_close;
         nextEventDay = now;
     } else if (openUpcoming) {
         nextMinute = openTodayMin;
+        nextOperation = AlarmOperateDoor::door_open;
         nextEventDay = now;
     } else if (closeUpcoming) {
         nextMinute = closeTodayMin;
+        nextOperation = AlarmOperateDoor::door_close;
         nextEventDay = now;
     } else {
         nextMinute = openTomorrowMin;
+        nextOperation = AlarmOperateDoor::door_open;
         nextEventDay = tomorrow;
     }
 
     DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(),
                            nextMinute / 60, nextMinute % 60, 0);
 
-    // Wake kWakeLeadMinutes before the actual target rather than at the
-    // target itself, so ESP32 boot/WiFi-bringup latency happens before the
-    // target arrives instead of eating into handleDueActions()'s tight fire
-    // window (see its comment). Clamped to never be earlier than "now" -
-    // an alarm time in the past would make the DS3231's ignore-date match
-    // roll over to the *next* occurrence a full day later instead of firing
-    // shortly, silently missing today's event; this only bites when the
-    // target itself is already less than kWakeLeadMinutes away, in which
-    // case there's nothing to lead-in for anyway.
-    DateTime wakeAt = nextEventUtc - TimeSpan(60 * kWakeLeadMinutes);
-    if (wakeAt < now) wakeAt = now + TimeSpan(1);
+    // Scheduled alarms carry the selected door operation and no WiFi startup;
+    // wake at the actual target and handle the action directly in setup().
+    DateTime wakeAt = nextEventUtc;
 
 #ifdef DEBUG_TRACES
     // Runs on every boot right before going back to sleep, so this doubles
@@ -279,10 +277,27 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
            openUpcoming, closeUpcoming, wakeAt.hour(), wakeAt.minute(), wakeAt.second());
 #endif
 
-    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second());
+    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(),
+                     nextOperation, false);
     rtc.clearAlarm();
 
-    goToSleep(kFallbackSleepSeconds/*, armExt0=true*/);
+    goToSleep(kFallbackSleepSeconds, true);
+}
+
+[[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds) {
+    DateTime wakeAt = rtc.now() + TimeSpan(seconds);
+    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(),
+                     AlarmOperateDoor::no_door_operation, true);
+    rtc.clearAlarm();
+    goToSleep(kDebugSleepFallbackSeconds, true);
+}
+
+[[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
+                                     AlarmOperateDoor operation, bool wifiUp) {
+    DateTime wakeAt = rtc.now() + TimeSpan(seconds);
+    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(), operation, wifiUp);
+    rtc.clearAlarm();
+    goToSleep(kDebugSleepFallbackSeconds, true);
 }
 
 }  // namespace Scheduler

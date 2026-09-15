@@ -25,12 +25,13 @@ fieldset{margin-bottom:1em}label{display:block;margin-top:.5em}
 input,select{width:100%;box-sizing:border-box;padding:.4em;margin-top:.2em}
 button{padding:.6em 1em;margin-top:.5em}
 .msg{background:#eef;padding:.5em;border-radius:4px;margin-bottom:1em}
+.rtc-alert{background:#f8d7da;border:2px solid #b00020;color:#8b0000;font-weight:bold;padding:.7em;border-radius:4px;margin-bottom:1em}
 .force{background:#fee}
 .warn{display:none;background:#fee;border:1px solid #c00;color:#900;font-weight:bold;padding:.6em;border-radius:4px;margin-bottom:1em}
 </style></head><body>
 <h2>Coop Door Setup</h2>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
-<div id='moveWarn' class='warn'>&#9888; The door may be moving right now &mdash; this page can stop responding for up to {{MOTOR_RUN_MS}}ms while it does. It will recover on its own once the move finishes.</div>
+<div id='moveWarn' class='warn'>&#9888; The door may be moving right now &mdash; this page can stop responding for up to {{MOTOR_MAX_RUN_MS}}ms while it does. It will recover on its own once the move finishes.</div>
 {{STATUS_BLOCK}}
 <form method='POST' action='/settime' onsubmit='return fillTime(this)'>
 <input type='hidden' name='y'><input type='hidden' name='mo'><input type='hidden' name='d'>
@@ -66,7 +67,8 @@ button{padding:.6em 1em;margin-top:.5em}
 <p>Door will close at {{CLOSE_UTC}} UTC, hence {{CLOSE_LOCAL}} local time.</p>
 </fieldset>
 <fieldset><legend>Motor</legend>
-<label>Run duration, ms<input type='number' name='motorRunMs' value='{{MOTOR_RUN_MS}}'></label>
+<label>Open duration, ms<input type='number' name='motorOpenMs' value='{{MOTOR_OPEN_MS}}'></label>
+<label>Close duration, ms<input type='number' name='motorCloseMs' value='{{MOTOR_CLOSE_MS}}'></label>
 <label>Invert direction<input type='checkbox' name='motorInvertDirection'{{MOTOR_INVERT_CHECKED}}></label>
 </fieldset>
 <button type='submit'>Save settings</button></form>
@@ -74,13 +76,14 @@ button{padding:.6em 1em;margin-top:.5em}
 <form method='POST' action='/force-open' style='display:inline'><button type='submit'>Force Open</button></form>
 <form method='POST' action='/force-close' style='display:inline'><button type='submit'>Force Close</button></form>
 <form method='POST' action='/sleep' style='display:inline'><button type='submit'>Sleep now</button></form>
+<form method='POST' action='/nap' style='display:inline'><button type='submit'>Nap and open</button></form>
 <p>Last event: {{LAST_EVENT}}</p>
 </fieldset>
 {{DEBUG_LOG_SECTION}}
 <script>
 function fillTime(f){var d=new Date();
-f.y.value=d.getFullYear();f.mo.value=d.getMonth()+1;f.d.value=d.getDate();
-f.h.value=d.getHours();f.mi.value=d.getMinutes();f.s.value=d.getSeconds();
+f.y.value=d.getUTCFullYear();f.mo.value=d.getUTCMonth()+1;f.d.value=d.getUTCDate();
+f.h.value=d.getUTCHours();f.mi.value=d.getUTCMinutes();f.s.value=d.getUTCSeconds();
 return true;}
 
 // Heartbeat: an open/close (scheduled, or Force Open/Close below) blocks

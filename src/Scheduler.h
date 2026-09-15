@@ -35,9 +35,9 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
 int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
                             const DateTime& utcDay);
 
-// Called repeatedly from WebPortal::run()'s poll loop, which is now the
-// *only* caller (see main.cpp) - every wake opens the portal and lets its
-// loop catch the target, rather than main.cpp calling this once directly.
+// Called from the direct door-action wake path and repeatedly from
+// WebPortal::run()'s poll loop. An explicit requested action is used by
+// one-shot web/debug wakes; NONE resolves the regular schedule.
 // No-op if the RTC has no valid time yet (first boot, never configured).
 // "Is now within a few seconds of today's open/close target", combined
 // with a basic debounce against the last-acted-on trigger (shared between
@@ -46,19 +46,25 @@ int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
 // it - don't double-fire. That debounce is keyed to the exact resolved
 // target, not "already done today", so a schedule change (even by a
 // minute) or the next day's occurrence still fires normally.
-// armNextAlarmAndSleep() below wakes the device a couple of minutes before
-// the target (see kWakeLeadMinutes), so by the time the target actually
-// arrives the portal has been polling for a while and the window only
-// needs to be a little wider than the poll interval to be caught reliably;
-// see the tolerance constants in Scheduler.cpp.
-void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door);
+// armNextAlarmAndSleep() wakes at the target because scheduled wakes do not
+// need WiFi startup time; see the tolerance constants in Scheduler.cpp.
+void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
+                      DoorAction requestedAction = DoorAction::NONE);
 
 // Computes the soonest of {today's remaining open, today's remaining close,
-// tomorrow's open}, arms DS3231 Alarm1 a little before it (kWakeLeadMinutes,
-// see Scheduler.cpp) so the device is awake and polling well ahead of the
-// actual target, and puts the ESP32 into deep sleep. Also arms a multi-hour
+// tomorrow's open}, arms DS3231 Alarm1 for that target, and puts the ESP32
+// into deep sleep. Also arms a multi-hour
 // timer wakeup as a safety net in case the RTC alarm is ever missed. Never
 // returns.
 [[noreturn]] void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store);
+
+// Arms a short WiFi-only wake. It is used as the second stage after a door
+// action that requested portal access.
+[[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds = 1);
+
+// Arms a short door-action wake. The next wake performs the operation first;
+// if wifiUp is true, it then schedules a separate WiFi-only wake.
+[[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
+                                     AlarmOperateDoor operation, bool wifiUp);
 
 }  // namespace Scheduler

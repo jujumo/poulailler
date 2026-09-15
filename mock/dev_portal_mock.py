@@ -507,15 +507,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             y, mo, d = int(args["y"]), int(args["mo"]), int(args["d"])
             h, mi, s = int(args["h"]), int(args["mi"]), int(args["s"])
-            # The hidden form fields are the browser's local wall clock; the
-            # RTC stores UTC, so convert using the configured timezone.
-            local_dt = datetime(y, mo, d, h, mi, s, tzinfo=ZoneInfo(config["timezone"]))
+            # The hidden form fields are the browser's UTC clock, matching the
+            # UTC value stored by the RTC without any DST conversion.
+            utc_dt = datetime(y, mo, d, h, mi, s, tzinfo=timezone.utc)
         except (KeyError, ValueError):
             self._send_html(400, "<p>Invalid date/time.</p>")
             return
 
         rtc_state["valid"] = True
-        rtc_state["set_to_utc"] = local_dt.astimezone(timezone.utc)
+        rtc_state["set_to_utc"] = utc_dt
         rtc_state["set_at_wall"] = time.monotonic()
         status_message = "Time synced from this device."
         self._redirect_to_root()

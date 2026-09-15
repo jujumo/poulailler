@@ -24,12 +24,24 @@ const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
     switch (cause) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
             return "UNDEFINED (power-on/reset/brownout)";
-        case ESP_SLEEP_WAKEUP_EXT0:
-            return "EXT0 (RTC alarm)";
+        case ESP_SLEEP_WAKEUP_EXT1:
+            return "EXT1 (RTC alarm)";
         case ESP_SLEEP_WAKEUP_TIMER:
             return "TIMER (fallback safety net)";
         default:
             return "OTHER";
+    }
+}
+
+const char* alarmOperateDoorName(AlarmOperateDoor operation) {
+    switch (operation) {
+        case AlarmOperateDoor::door_open:
+            return "door_open";
+        case AlarmOperateDoor::door_close:
+            return "door_close";
+        case AlarmOperateDoor::no_door_operation:
+        default:
+            return "no_door_operation";
     }
 }
 
@@ -71,11 +83,11 @@ void setup() {
     DoorController door(store, rtc);
     door.begin();
 
-    // Every wake - true reset, DS3231 alarm, or the fallback timer - takes
-    // the same path below (open the portal, then re-arm); `cause` only
-    // matters for tracing which one this was.
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    (void)cause;
+    AlarmOperateDoor operation = rtc.alarmOperateDoor();
+    bool wifiRequested = rtc.alarmWifiUp();
+    bool doorActionRequested = cause == ESP_SLEEP_WAKEUP_EXT1 &&
+                               operation != AlarmOperateDoor::no_door_operation;
 
 #ifdef DEBUG_TRACES
     // Printed immediately at boot, before the (potentially 5-minute-long)
@@ -85,34 +97,68 @@ void setup() {
     if (rtc.isTimeValid()) {
         DateTime utcNow = rtc.now();
         TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, cfg.timezone);
-        TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
+       TRACEF("[Boot] wake cause=%s operate=%s wifiUp=%d lastEvent=%s@%lu RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
                "%04d-%02d-%02d %02d:%02d:%02d local",
-               wakeCauseName(cause), doorActionName(cfg.lastOperationAction),
+            wakeCauseName(cause), alarmOperateDoorName(operation), wifiRequested,
+            doorActionName(cfg.lastOperationAction),
                static_cast<unsigned long>(cfg.lastOperationUnixTime), utcNow.year(), utcNow.month(),
                utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second(), localNow.dt.year(),
                localNow.dt.month(), localNow.dt.day(), localNow.dt.hour(), localNow.dt.minute(),
                localNow.dt.second());
     } else {
-        TRACEF("[Boot] wake cause=%s lastEvent=%s@%lu, RTC time not valid (never set / lost power)",
-               wakeCauseName(cause), doorActionName(cfg.lastOperationAction),
+         TRACEF("[Boot] wake cause=%s operate=%s wifiUp=%d lastEvent=%s@%lu, RTC time not valid (never set / lost power)",
+            wakeCauseName(cause), alarmOperateDoorName(operation), wifiRequested,
+             doorActionName(cfg.lastOperationAction),
                static_cast<unsigned long>(cfg.lastOperationUnixTime));
     }
 #endif
 
     // Clear the alarm-fired flag right away regardless of wake cause - see
-    // the correctness rule in CLAUDE.md; must happen again immediately
+    // the correctness rule in ARCHITECRTURE.md; must happen again immediately
     // before every esp_deep_sleep_start() too (see Scheduler).
     rtc.clearAlarm();
 
-    // There's no separate "just run the scheduler and go back to sleep"
-    // path: armNextAlarmAndSleep() now wakes the device kWakeLeadMinutes
-    // before an open/close target rather than at it (see Scheduler.cpp), so
-    // the portal's own periodic handleDueActions() poll (WebPortal::run())
-    // is what actually catches the target precisely, and running the
-    // portal on every wake means it's reachable without a manual reset.
-    WebPortal portal(store, rtc, door);
-    portal.run(kConfigPortalDurationMs);
-    cfg = store.load();  // portal may have changed it
+    if (doorActionRequested) {
+        TRACE("[Boot] door-operation wake: operating without WiFi");
+        DoorAction requestedAction = operation == AlarmOperateDoor::door_open
+                                         ? DoorAction::OPENED
+                                         : DoorAction::CLOSED;
+        Scheduler::handleDueActions(cfg, rtc, door, requestedAction);
+        // A debug action requests a separate WiFi session. A scheduled action
+        // consumes any WiFi request and goes directly to the next schedule.
+        if (!wifiRequested) {
+            TRACE("[Boot] scheduled door action complete: WiFi request consumed");
+        }
+    } else {
+        // No door action means this is a service session. This also handles
+        // reset and fallback-timer wakes; a timer must never execute a
+        // retained door operation early.
+        wifiRequested = true;
+        door.signalReady(cfg);
+        TRACE("[Boot] WiFi wake: starting portal");
+        WebPortal portal(store, rtc);
+        WebPortalRequest webRequest;
+        do {
+            webRequest = portal.run(kConfigPortalDurationMs);
+        } while (!rtc.isTimeValid());
+        cfg = store.load();  // portal may have changed it
+        wifiRequested = false;  // the WiFi session has been consumed
+
+        if (webRequest == WebPortalRequest::FORCE_OPEN ||
+            webRequest == WebPortalRequest::FORCE_CLOSE ||
+            webRequest == WebPortalRequest::NAP) {
+            operation = webRequest == WebPortalRequest::FORCE_CLOSE
+                            ? AlarmOperateDoor::door_close
+                            : AlarmOperateDoor::door_open;
+            wifiRequested = true;  // debug action keeps WiFi for the next session
+            Scheduler::sleepForDoorAction(rtc, 2, operation, true);
+        }
+    }
+
+    if (wifiRequested) {
+        TRACE("[Boot] WiFi request remains active: scheduling WiFi wake");
+        Scheduler::sleepForWifi(rtc, 2);  // never returns
+    }
 
     Scheduler::armNextAlarmAndSleep(cfg, rtc, store);  // never returns
 }

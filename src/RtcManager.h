@@ -2,6 +2,14 @@
 
 #include <RTClib.h>
 
+#include "ConfigStore.h"
+
+enum class AlarmOperateDoor : uint8_t {
+    no_door_operation,
+    door_open,
+    door_close,
+};
+
 // Thin wrapper around RTClib's RTC_DS3231.
 // Alarm1 is always used in "match hours/minutes/seconds, ignore date" mode:
 // it fires at the next occurrence of that time-of-day, today or tomorrow,
@@ -19,11 +27,19 @@ public:
 
     // Arms Alarm1 for the next occurrence of hour:minute:second and enables
     // the alarm interrupt on the INT/SQW pin.
-    void setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second);
+    void setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second,
+                      AlarmOperateDoor operateDoor, bool wifiUp);
+
+    // Returns the operation and WiFi stages recorded when the current
+    // deep-sleep alarm was armed. A cold boot has no retained operation.
+    AlarmOperateDoor alarmOperateDoor() const;
+    bool alarmWifiUp() const;
+
+    // Arms the next RTC alarm and records the staged wake behavior.
 
     // Clears the Alarm1 fired flag. MUST be called after handling a wake and
     // again immediately before every deep sleep - otherwise the open-drain
-    // INT line stays asserted and ext0 wake fires again instantly.
+    // INT line stays asserted and EXT1 wake fires again instantly.
     void clearAlarm();
 
 private:

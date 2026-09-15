@@ -5,6 +5,11 @@
 #include "Debug.h"
 #include "config.h"
 
+namespace {
+RTC_DATA_ATTR AlarmOperateDoor retainedAlarmOperateDoor = AlarmOperateDoor::no_door_operation;
+RTC_DATA_ATTR bool retainedAlarmWifiUp = false;
+}
+
 bool RtcManager::begin() {
     Wire.begin(PIN_RTC_SDA, PIN_RTC_SCL);
     Wire.setTimeOut(100);
@@ -35,11 +40,22 @@ void RtcManager::setTime(const DateTime& dt) {
     rtc_.adjust(dt);
 }
 
-void RtcManager::setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second) {
+void RtcManager::setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second,
+                              AlarmOperateDoor operateDoor, bool wifiUp) {
     // Date/day fields are ignored in DS3231_A1_Hour mode - only h:m:s matter.
     DateTime alarmTime(2000, 1, 1, hour, minute, second);
     rtc_.clearAlarm(1);
     rtc_.setAlarm1(alarmTime, DS3231_A1_Hour);
+    retainedAlarmOperateDoor = operateDoor;
+    retainedAlarmWifiUp = wifiUp;
+}
+
+AlarmOperateDoor RtcManager::alarmOperateDoor() const {
+    return retainedAlarmOperateDoor;
+}
+
+bool RtcManager::alarmWifiUp() const {
+    return retainedAlarmWifiUp;
 }
 
 void RtcManager::clearAlarm() {

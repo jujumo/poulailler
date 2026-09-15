@@ -28,7 +28,8 @@ Config ConfigStore::load() {
         prefs.getUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction)));
     cfg.lastOperationUnixTime = prefs.getULong("lastOpTime", cfg.lastOperationUnixTime);
     cfg.lastTriggerUnixTime = prefs.getULong("lastTrigger", cfg.lastTriggerUnixTime);
-    cfg.motorRunMs = prefs.getULong("motorRunMs", cfg.motorRunMs);
+    cfg.motorOpenDurationMs = prefs.getULong("motorOpenMs", cfg.motorOpenDurationMs);
+    cfg.motorCloseDurationMs = prefs.getULong("motorCloseMs", cfg.motorCloseDurationMs);
     cfg.motorInvertDirection = prefs.getBool("motorInvertDir", cfg.motorInvertDirection);
 
     cfg.configured = prefs.getBool("configured", cfg.configured);
@@ -56,7 +57,8 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction));
     prefs.putULong("lastOpTime", cfg.lastOperationUnixTime);
     prefs.putULong("lastTrigger", cfg.lastTriggerUnixTime);
-    prefs.putULong("motorRunMs", cfg.motorRunMs);
+    prefs.putULong("motorOpenMs", cfg.motorOpenDurationMs);
+    prefs.putULong("motorCloseMs", cfg.motorCloseDurationMs);
     prefs.putBool("motorInvertDir", cfg.motorInvertDirection);
 
     prefs.putBool("configured", cfg.configured);

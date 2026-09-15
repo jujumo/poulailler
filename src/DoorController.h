@@ -20,11 +20,13 @@ public:
     DoorController(ConfigStore& store, RtcManager& rtc);
 
     void begin();
+    void signalReady(const Config& cfg);
 
     void open(Config& cfg);
     void close(Config& cfg);
 
 private:
+    void setDirection(DoorAction action, bool invert);
     void run(Config& cfg, DoorAction action);
     void stopMotor();
 

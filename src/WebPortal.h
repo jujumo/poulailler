@@ -5,20 +5,27 @@
 #include <WiFiServer.h>
 
 #include "ConfigStore.h"
-#include "DoorController.h"
 #include "RtcManager.h"
 
-// SoftAP + self-contained config web page. Only ever instantiated and run
-// once, for a bounded duration, right after a power-on/reset boot. Force
-// Open/Close exist only as routes on this server, so they structurally stop
-// being reachable the moment the portal is torn down.
+enum class WebPortalRequest : uint8_t {
+    NONE,
+    FORCE_OPEN,
+    FORCE_CLOSE,
+    NAP,
+};
+
+// SoftAP + self-contained config web page. Instantiated for a bounded
+// duration on reset, setup, unknown, and WiFi-only wakes. Open/Close
+// requests arm a deferred action wake and therefore stop being reachable when
+// the portal is torn down.
 class WebPortal {
 public:
-    WebPortal(ConfigStore& store, RtcManager& rtc, DoorController& door);
+    WebPortal(ConfigStore& store, RtcManager& rtc);
 
     // Starts the AP, serves the page for durationMs, then tears the AP down
-    // and returns. Blocking.
-    void run(unsigned long durationMs);
+    // and returns the requested action. The caller owns all sleep and door
+    // execution decisions.
+    WebPortalRequest run(unsigned long durationMs);
 
 private:
     void setupRoutes();
@@ -28,6 +35,7 @@ private:
     void handleForceOpen();
     void handleForceClose();
     void handleSleepNow();
+    void handleNapNow();
     void handlePing();
     void redirectToRoot();
 
@@ -35,10 +43,11 @@ private:
 
     ConfigStore& store_;
     RtcManager& rtc_;
-    DoorController& door_;
     WebServer server_;
     DNSServer dnsServer_;
     WiFiServer httpsStub_;
     Config cfg_;
     String statusMessage_;
+    WebPortalRequest request_ = WebPortalRequest::NONE;
+    bool stopRequested_ = false;
 };
