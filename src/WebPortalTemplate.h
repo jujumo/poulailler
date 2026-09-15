@@ -28,6 +28,7 @@ button{padding:.6em 1em;margin-top:.5em}
 .rtc-alert{background:#f8d7da;border:2px solid #b00020;color:#8b0000;font-weight:bold;padding:.7em;border-radius:4px;margin-bottom:1em}
 .force{background:#fee}
 .warn{display:none;background:#fee;border:1px solid #c00;color:#900;font-weight:bold;padding:.6em;border-radius:4px;margin-bottom:1em}
+.preview{font-weight:bold}
 </style></head><body>
 <h2>Coop Door Setup</h2>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
@@ -40,31 +41,31 @@ button{padding:.6em 1em;margin-top:.5em}
 <form method='POST' action='/save'>
 <fieldset><legend>Current RTC time</legend>
 {{NOW_SUFFIX}}
-<p>Local time: {{LOCAL_TIME}}</p>
+<p>Local time: <strong>{{LOCAL_TIME}}</strong></p>
 <label>Timezone<select name='timezone'>{{TIMEZONE_OPTIONS}}</select></label>
 <p>UTC time: {{UTC_TIME}}</p>
-<p>Next sunrise (local): {{SUNRISE}}</p>
-<p>Next sunrise (UTC): {{SUNRISE_UTC}}</p>
-<p>Next sunset (local): {{SUNSET}}</p>
-<p>Next sunset (UTC): {{SUNSET_UTC}}</p>
 </fieldset>
-<fieldset><legend>Location</legend>
+<fieldset><legend>Sun ephemeris</legend>
 <label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='{{LAT}}'></label>
 <label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' value='{{LON}}'></label>
+<p>Next sunrise: <span id='sunriseLocal'>{{SUNRISE}}</span> (<span id='sunriseUtc'>{{SUNRISE_UTC}}</span> UTC)</p>
+<p>Next sunset: <span id='sunsetLocal'>{{SUNSET}}</span> (<span id='sunsetUtc'>{{SUNSET_UTC}}</span> UTC)</p>
 </fieldset>
 <fieldset><legend>Door opens</legend>
+<p>The door is currently set to open at {{OPEN_LOCAL}} ({{OPEN_UTC}} UTC). Changes made here take effect only after you save settings.</p>
 <label><input type='radio' name='openMode' value='absolute'{{OPEN_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='openAbs' value='{{OPEN_ABS}}'>
 <label><input type='radio' name='openMode' value='sun'{{OPEN_SUN_CHECKED}}> Relative to sunrise (minutes offset, +/-)</label>
-<input type='text' inputmode='decimal' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
-<p>Door will open at {{OPEN_UTC}} UTC, hence {{OPEN_LOCAL}} local time.</p>
+<input type='number' min='-720' max='720' step='1' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
+<p id='openPreview' class='preview'></p>
 </fieldset>
 <fieldset><legend>Door closes</legend>
+<p>The door is currently set to close at {{CLOSE_LOCAL}} ({{CLOSE_UTC}} UTC). Changes made here take effect only after you save settings.</p>
 <label><input type='radio' name='closeMode' value='absolute'{{CLOSE_ABS_CHECKED}}> At a fixed time</label>
 <input type='time' name='closeAbs' value='{{CLOSE_ABS}}'>
 <label><input type='radio' name='closeMode' value='sun'{{CLOSE_SUN_CHECKED}}> Relative to sunset (minutes offset, +/-)</label>
-<input type='text' inputmode='decimal' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
-<p>Door will close at {{CLOSE_UTC}} UTC, hence {{CLOSE_LOCAL}} local time.</p>
+<input type='number' min='-720' max='720' step='1' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
+<p id='closePreview' class='preview'></p>
 </fieldset>
 <fieldset><legend>Motor</legend>
 <label>Open duration, ms<input type='number' name='motorOpenMs' value='{{MOTOR_OPEN_MS}}'></label>
@@ -85,6 +86,55 @@ function fillTime(f){var d=new Date();
 f.y.value=d.getUTCFullYear();f.mo.value=d.getUTCMonth()+1;f.d.value=d.getUTCDate();
 f.h.value=d.getUTCHours();f.mi.value=d.getUTCMinutes();f.s.value=d.getUTCSeconds();
 return true;}
+
+function parseClock(value){
+    var match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    var hours = Number(match[1]);
+    var minutes = Number(match[2]);
+    return hours < 24 && minutes < 60 ? hours * 60 + minutes : null;
+}
+
+function formatClock(totalMinutes){
+    totalMinutes = ((totalMinutes % 1440) + 1440) % 1440;
+    var hours = Math.floor(totalMinutes / 60);
+    var minutes = totalMinutes % 60;
+    return (hours < 10 ? '0' : '') + hours + ':' + (minutes < 10 ? '0' : '') + minutes;
+}
+
+function updatePreview(modeName, absoluteName, offsetName, eventLocalId, eventUtcId, previewId){
+    var mode = document.querySelector("input[name='" + modeName + "']:checked");
+    var preview = document.getElementById(previewId);
+    if (!mode) return;
+
+    if (mode.value === 'absolute') {
+        var absolute = document.querySelector("input[name='" + absoluteName + "']").value;
+        preview.textContent = absolute ? 'Preview: ' + absolute + ' local (fixed time)' : 'Preview unavailable: enter a time.';
+        return;
+    }
+
+    var localEvent = parseClock(document.getElementById(eventLocalId).textContent);
+    var utcEvent = parseClock(document.getElementById(eventUtcId).textContent);
+    var offsetText = document.querySelector("input[name='" + offsetName + "']").value.trim();
+    var offset = offsetText === '' ? NaN : Number(offsetText);
+    if (localEvent === null || utcEvent === null || !Number.isInteger(offset)) {
+        preview.textContent = 'Preview unavailable: sync time and enter a whole-minute offset.';
+        return;
+    }
+    preview.textContent = 'Preview: ' + formatClock(localEvent + offset) + ' local (' +
+        formatClock(utcEvent + offset) + ' UTC)';
+}
+
+function updateDoorPreviews(){
+    updatePreview('openMode', 'openAbs', 'openSunOff', 'sunriseLocal', 'sunriseUtc', 'openPreview');
+    updatePreview('closeMode', 'closeAbs', 'closeSunOff', 'sunsetLocal', 'sunsetUtc', 'closePreview');
+}
+
+document.querySelectorAll("input[name='openMode'], input[name='openAbs'], input[name='openSunOff'], input[name='closeMode'], input[name='closeAbs'], input[name='closeSunOff']").forEach(function(input){
+    input.addEventListener('input', updateDoorPreviews);
+    input.addEventListener('change', updateDoorPreviews);
+});
+updateDoorPreviews();
 
 // Heartbeat: an open/close (scheduled, or Force Open/Close below) blocks
 // this whole sketch's loop for the move's duration (see CLAUDE.md), so a
