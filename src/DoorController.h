@@ -20,7 +20,7 @@ public:
     DoorController(ConfigStore& store, RtcManager& rtc);
 
     void begin();
-    void jitter(const Config& cfg);
+    void jitter();
 
     void open(Config& cfg);
     void close(Config& cfg);

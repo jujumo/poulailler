@@ -17,16 +17,16 @@ void DoorController::begin() {
            digitalRead(PIN_MOTOR_IN1), digitalRead(PIN_MOTOR_IN2));
 }
 
-void DoorController::jitter(const Config& cfg) {
+void DoorController::jitter() {
     constexpr unsigned long kSignalPulseMs = 100;
 
     digitalWrite(PIN_MOTOR_SLEEP, HIGH);
     for (int pulse = 0; pulse < 2; ++pulse) {
-        startMoving(cfg.motorInvertDirection ? Direction::CLOSE : Direction::OPEN);
+        startMoving(Direction::OPEN);
         delay(kSignalPulseMs);
         stopMoving();
 
-        startMoving(cfg.motorInvertDirection ? Direction::OPEN : Direction::CLOSE);
+        startMoving(Direction::CLOSE);
         delay(kSignalPulseMs);
         stopMoving();
     }
