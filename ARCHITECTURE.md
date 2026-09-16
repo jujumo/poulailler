@@ -1,68 +1,240 @@
-# CLAUDE.md
+# Poulailler architecture
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This firmware is a low-power ESP32-C6 controller for a chicken-coop door. It is intentionally not a continuously running application. It sleeps most of the time, wakes on a scheduled alarm or a service wake, performs one bounded task, and then goes back to deep sleep.
 
-## What this is
+The design priorities are:
 
-PlatformIO/Arduino firmware for an ESP32-based automatic chicken coop door. It runs on battery with no internet access, keeps time via an external DS3231 RTC, and drives the door with a BTS7960 (IBT-2) H-bridge motor driver. The door opens/closes on a schedule that is either a fixed clock time or an offset from a locally-computed sunrise/sunset. Configuration is done through a WiFi access point + web page that is served for 5 minutes on reset, setup, debug, and other non-scheduled wakes. Scheduled door-action wakes skip WiFi, perform the due action, and return to deep sleep (see `Scheduler`).
+- never move the door before the requested time;
+- never run a door action during a WiFi service session;
+- keep all persistent state in NVS or the RTC, not in RAM;
+- always clear the DS3231 alarm before continuing and before sleeping again.
 
-See `README.md` for wiring, flashing, and bring-up/configuration steps.
+## 1. Execution model
 
-## Commands
+### Deep-sleep wake flow
 
-```
-pio run                 # build the esp32dev firmware
-pio run -t upload       # flash it
-pio device monitor      # serial monitor (115200 baud)
+The code in `src/main.cpp` is a dispatcher, not a state machine.
 
-pio run -e esp32dev-debug              # same firmware, with serial traces compiled in (see Debugging)
-pio run -e esp32dev-debug -t upload    # flash the traced build
-```
+On every boot or wake:
 
-The `Makefile` wraps these: `make build`/`make upload`/`make monitor`/`make flash` for the default env, `make debug`/`make upload-debug`/`make flash-debug` for the traced one.
+1. `setup()` starts fresh.
+2. It loads configuration from `ConfigStore`.
+3. It initializes the RTC wrapper.
+4. It checks the wake cause and the retained alarm payload.
+5. It then does exactly one of the following:
+   - execute a pending `door_open` / `door_close` action,
+   - serve the WiFi web portal,
+   - or arm the next scheduled event and sleep again.
+6. `loop()` is empty.
 
-There is no automated test target — sunrise/sunset math is delegated to the `Dusk2Dawn` library rather than hand-rolled, and everything else requires real ESP32/DS3231/BTS7960 hardware to exercise. Those checks are manual (see the "What to verify on real hardware" section of `README.md`).
+The project depends on this model: RAM is not a durable state container across sleep cycles.
 
-## Architecture
+### Why the loop is empty
 
-### Current wake and action routing
+The ESP32 goes to deep sleep between work windows. A wake is simply a fresh boot with a different reason. Anything that matters between cycles must be stored either in:
 
-`AlarmOperateDoor` and `AlarmWifiUp` are independent retained wake fields.
-`AlarmOperateDoor` can request open, close, or no operation; `AlarmWifiUp`
-selects whether a separate WiFi-only wake follows. Door operation always has
-priority and never runs in a WiFi session. Scheduled alarms carry the selected
-door operation and no WiFi; web Open, Close, and Nap requests arm a one-second door wake with
-WiFi requested as the next stage. A WiFi-only wake runs the portal until timeout
-or a user command, then arms the next scheduled door alarm.
+- the ESP32 NVS (`ConfigStore`), or
+- the DS3231 RTC and its retained alarm metadata (`RtcManager`).
 
-`src/main.cpp` is a thin dispatcher, not a stateful program: on every boot it clears the DS3231 alarm flag, performs any retained door operation without WiFi, then either schedules a separate WiFi-only wake or starts the portal. After the portal times out, it arms the next scheduled door alarm. `loop()` is intentionally empty — deep-sleep wake re-enters `setup()` from scratch, so **no state may live in RAM/globals across a sleep cycle**; everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
+That is why all decisions are re-derived on each wake instead of carried forward through a long-lived loop.
 
-`esp_sleep_get_wakeup_cause()` is traced (`UNDEFINED` = power-on/reset/brownout; `EXT1` = DS3231 alarm; `TIMER` = fallback safety net), while `AlarmOperateDoor` and `AlarmWifiUp` control the staged work. Door operation always takes priority. WiFi is only started during a WiFi-only wake, and the next scheduled door alarm is armed when that session ends.
+## 2. Safety rules
 
-Modules (`src/`), each with a single responsibility:
-- `ConfigStore` — wraps `Preferences` (ESP32 NVS), namespace `doorcfg`. Owns the `Config` struct and its defaults; getters always pass an explicit default so a first-boot/corrupt-NVS namespace degrades safely rather than needing special-case handling elsewhere.
-- `RtcManager` — wraps `RTClib`'s `RTC_DS3231`. Always arms Alarm1 in "match hours/minutes/seconds, ignore date" mode (`DS3231_A1_Hour`), so the hardware itself resolves whether the next occurrence is today or tomorrow — callers never do date arithmetic for the alarm itself. The DS3231 always stores **UTC**, never local time — see `TimeZone`.
-- `TimeZone`/`TimeZones.h` — converts between the DS3231's UTC and local wall-clock time for a named zone (`Config::timezone`, e.g. `"Europe/Paris"`). `TimeZones.h` is a curated table of POSIX TZ strings (not the full IANA database — no internet access to fetch one, and no filesystem to store it); `TimeZone.cpp` resolves DST via the C library's own `setenv`/`tzset`/`localtime`/`mktime`, not a hand-rolled rule table. **`Scheduler`'s internal scheduling math is entirely UTC-space** — `Config::openAbsMinutes`/`closeAbsMinutes` are the only local-time values in the system (what the user actually typed), and `Scheduler::localAbsMinutesToUtc()` resolves them to UTC fresh on *every* wake cycle for that specific calendar day, rather than storing a one-time-converted UTC snapshot — that's what makes a DST transition self-correct without a manual re-save. `WebPortal` goes through `TimeZone` too, but only for display (`RtcManager::now()`'s raw UTC value shown alongside its local conversion) and for converting incoming local input (`/settime`, and the open/close time pickers) to UTC before it's compared or stored.
-- Sunrise/sunset is computed by the `Dusk2Dawn` library (a port of NOAA's solar calculator, added via `lib_deps`) rather than hand-rolled — see `computeSunTimes()` in `Scheduler.cpp`, which wraps it and normalizes its output into a `SunTimes{sunriseMinutes, sunsetMinutes, valid}` struct. `valid=false` for polar day/night (the library returns `-1`); callers must fall back to absolute-time config rather than use the output. It's called with `timezone=0`/`isDST=false`, giving Dusk2Dawn's raw UTC output directly — sunrise/sunset is purely a function of lat/lon/date, so no timezone conversion belongs here at all now that the rest of `Scheduler` is UTC-native.
-- `DoorController` — the only module that touches the BTS7960 pins. Timed movement only — no limit switches, no current sensing (by design, not a gap). It **always moves the motor when `open()`/`close()` is called** — it has no notion of "already there" to skip against. Whether to call it at all is entirely the caller's decision: `WebPortal`'s Force Open/Close buttons call it unconditionally with no gate at all; `Scheduler` calls it on "is now inside the open/close fire window" *and* a basic debounce (see below). After a move completes, it self-timestamps via its own `RtcManager` and records `cfg.lastOperationAction` (which) and `cfg.lastOperationUnixTime` (when it **really** happened) — unconditionally, regardless of who called it. These are display-only and entirely separate from `Scheduler`'s debounce bookkeeping (`Config::lastTriggerUnixTime`, see below) — `DoorController` never reads or writes that field; only `Scheduler` does. (An earlier design used a `doorState` field as an idempotency gate here, then a `lastOpenDay`/`lastCloseDay` "already done today" gate in `Scheduler`, then briefly an in-RAM `DueActionTracker` in `WebPortal`; all were removed by explicit request — the door should do exactly what the clock says, nothing smarter. What made that safe rather than reckless was `Scheduler`'s fire window being tight (a handful of seconds, not minutes) combined with waking well ahead of the target — see `Scheduler` below — so in practice a target is really only ever inside the window for one or two consecutive polls. That "one or two consecutive polls" case turned out to be a real, if narrow, double-fire risk on its own, which is why a debounce was reintroduced — see `Scheduler` below for how it differs from the earlier rejected designs. A brief intermediate version merged the debounce key and the display timestamp into one field, requiring `DoorController::open()`/`close()` to take a caller-supplied timestamp instead of self-timestamping; that made the field's meaning caller-dependent, which is why it was split back into the two clearly-named, clearly-owned fields described here.)
-- `Scheduler` — the scheduling brain. `handleDueActions()` resolves the open/close minute-of-day (absolute or sun-offset) via `resolveScheduleMinutes(cfg, isOpen, sun, utcDay)` — the one place the "open or close?" field dispatch happens; `armNextAlarmAndSleep()` below and `WebPortal`'s display code all call this instead of duplicating it — and moves the door if `now` is within `kToleranceBeforeSec`/`kToleranceAfterSec` (a few seconds either side) of that target, called repeatedly from `WebPortal::run()`'s poll loop (the only caller; `main.cpp` no longer calls it directly). It also checks a basic debounce before actually firing: `Config::lastTriggerUnixTime` holds the *trigger* — the idealized, minute-quantized schedule target (not the real wall-clock fire moment; that's `DoorController`'s separate `lastOperationUnixTime`, see above) — last acted on, shared between open and close rather than one field each, since the two are assumed to never resolve to the same trigger; a poll only fires if the freshly-resolved trigger differs from that stored value, and `Scheduler` stamps the new value onto `cfg.lastTriggerUnixTime` itself before calling `DoorController::open()`/`close()`, which persists it as part of its own `store_.save(cfg)`. This is deliberately much narrower than the previously-rejected "already done today" gates: it's keyed to the exact trigger (a specific calendar day *and* minute), not the day, so a schedule that shifts by even a minute after a re-save, or the next day's occurrence of the same time-of-day, is a different value and fires normally — it only ever suppresses a second fire for the literal same occurrence (two polls landing in the same ~10-second tolerance window, or a brownout-reboot landing back in it). One accepted edge case: if open and close are ever configured to the exact same time-of-day, only whichever is checked first (open) fires — not a supported configuration. `armNextAlarmAndSleep()` picks the soonest of {today's remaining open, today's remaining close, tomorrow's open} — only among candidates whose time-of-day hasn't already elapsed today (an already-passed "today" time would make the DS3231's ignore-date alarm roll to *tomorrow*, silently pre-empting a still-upcoming event later today) — then arms the DS3231 alarm `kWakeLeadMinutes` (currently 2) *before* that target rather than at it, so ESP32 boot/WiFi-bringup latency happens before the target arrives instead of eating into `handleDueActions()`'s tight window; the lead-adjusted wake time is clamped to never be earlier than `now` (an alarm time in the past would make the DS3231's ignore-date match roll a full day forward instead of firing shortly — only matters when the target itself is already less than the lead away, in which case there's nothing to lead in for anyway). Also arms a 6-hour fallback timer wake as a safety net, and calls `esp_deep_sleep_start()`.
-- `WebPortal` — SoftAP + synchronous `WebServer`, serves one self-contained server-rendered HTML page (no JS framework, no CDN assets — nothing external is reachable anyway). Routes: `/` (page), `/save` (config form), `/settime` (browser-clock sync via a tiny inline JS snippet), `/force-open`, `/force-close`, `/sleep` (debug: skip the rest of the portal window and deep-sleep immediately, to exercise a real DS3231/`ext0` wake without waiting), `/ping` (see below). `main.cpp` opens this on *every* wake now, not just a reset, so its `run()` loop is where `Scheduler::handleDueActions()` actually gets called: once immediately on entry (so a wake that lands right on a wake-lead-adjusted target doesn't wait out a full poll interval before the first check), then every 5s (`kScheduleCheckIntervalMs`, throttled — RTC/I2C reads and sun-time math don't need sub-second freshness) for the rest of the portal's 5-minute window. Repeat polls landing in the same fire window are handled by `Scheduler`'s own target-based debounce, not by anything here — see `Scheduler` above. This whole loop is single-threaded and synchronous — no FreeRTOS task, no async HTTP library anywhere in this codebase — so when `handleDueActions()` actually fires a move, `DoorController::run()`'s blocking blink-delay loop (`motorRunMs`, 3.5s default / 120s max) monopolizes it for the whole move: `server_.handleClient()`/`dnsServer_.processNextRequest()` aren't called at all during that window, so an in-flight request is left on hold (its TCP connection is still accepted by the underlying WiFi/lwIP stack, independent of this sketch) rather than rejected — it just stalls for up to `motorRunMs` before getting a response. `/force-open`, `/force-close`, and `/sleep` don't go through `handleDueActions()` at all. All of `WebPortal.cpp`'s HTML lives in one `R"HTML(...)HTML"` literal in `WebPortalTemplate.h`; if you touch it, keep every `<form>` a sibling of the others — a `<form>` nested inside another is invalid HTML, and browsers silently drop the inner tag and let its closing `</form>` terminate the *outer* form early, orphaning everything after it outside any form (this exact bug once made the entire settings form uninhabitable to submit).
-  - Since the server genuinely can't respond while it's blocked moving the door, the page can't be told "moving now" by the server — the "moving" warning banner (`#moveWarn`) is inferred client-side instead: a `setInterval` heartbeat in the page's inline JS hits `/ping` (a trivial always-200 route, added purely so this heartbeat has something cheap to hang on) every 3s, and shows the banner if a reply doesn't come back within 1.5s — the same blocked loop that stalls a real request stalls `/ping` identically, so a slow ping *is* the "door is actually moving" signal, whether the move was triggered by the schedule or by Force Open/Close. Deliberately not triggered on the Force Open/Close button click itself — clicking only *requests* a move, and the loop doesn't block until `DoorController::run()` actually starts, so a click-triggered banner would be guessing rather than observing. The banner hides itself once a `/ping` reply finally arrives.
+### Rule 1: scheduled actions never fire early
 
-Config fields live in `ConfigStore.h`. `timezone` is a zone *name* looked up in `TimeZones.h` (not a raw UTC offset) — see `TimeZone` above. `lastOperationAction`/`lastOperationUnixTime` (display, `DoorController`-owned) and `lastTriggerUnixTime` (`Scheduler`'s debounce key) are two separate, single-owner concepts that happen to sit next to each other — don't conflate them, and don't add a UI element that lets a user edit either.
+The schedule gate is in `Scheduler::handleDueActions()`.
 
-`include/config.h` is the single source of truth for all GPIO assignments and board-level constants (WiFi AP SSID/password). `PIN_RTC_INT` (GPIO15) must stay on an RTC-capable, `ext0`-wakeup-eligible GPIO if it's ever reassigned.
+The target is a UTC minute-of-day, and the comparison is against the current UTC second-of-day. The allowed condition is intentionally asymmetric:
 
-### The one correctness rule that matters most
+- allowed: on or after the target time,
+- allowed: a small grace period after the target,
+- forbidden: before the target.
 
-The DS3231 alarm flag must be cleared both right after waking (unconditionally, at the top of `setup()` in `main.cpp`, before the wake cause even matters) and again immediately before every `esp_deep_sleep_start()` (see `Scheduler::armNextAlarmAndSleep()`). Skipping either clear leaves the open-drain `INT` line asserted, and `ext0` (level-triggered) wakes the device again instantly — a fast, battery-draining wake loop.
+The lower bound is explicitly `0` seconds, so the logic permits a near-boundary execution but not an early action.
 
-### Debug tracing
+This is the main safety check that prevents the door from opening or closing early than requested.
 
-`include/Debug.h` defines `TRACE`/`TRACEF` macros (thin `Serial.print`/`printf` wrappers) that compile to nothing unless built with `-D DEBUG_TRACES`. `platformio.ini` has a second env, `esp32dev-debug` (`extends = env:esp32dev`, adds that flag), so a plain `pio run`/`make build`/`make upload` (default env `esp32dev`) stays completely trace-free — use `make debug` / `make upload-debug` / `make flash-debug` to build/flash the traced firmware instead.
+### Rule 2: door actions and WiFi are separate phases
 
-Traced today: wake cause + `lastOperationAction` + RTC time (UTC/local) at the very top of `setup()` (before the config portal, so it's visible even if the portal runs the full 5 minutes); `Scheduler`'s resolved open/close time-of-day and fire decision on every `handleDueActions()` call, and the resolved next event plus the actual (wake-lead-adjusted) date/time armed in `armNextAlarmAndSleep()`; `WebPortal`'s AP-up, client-connect, page-serve, `POST /save` (raw fields on entry, explicit message on validation rejection, resolved next open/close on success), and force-open/close events; `DoorController`'s move start/end. When adding a new trace, gate any nontrivial computation it needs (e.g. a `TimeZone::toLocal()` call) behind its own `#ifdef DEBUG_TRACES` block rather than relying on `TRACEF`'s no-op expansion to skip it — macro arguments are only dropped if the whole call is a single expression; separate statements before the call still run in a release build.
+The firmware distinguishes two kinds of wake:
 
-Every `TRACE`/`TRACEF` call also feeds `TraceLog` (`include/TraceLog.h` / `src/TraceLog.cpp`), a small in-RAM ring buffer (40 lines) — its whole definition is compiled out under `#ifdef DEBUG_TRACES`, same as the macros themselves, so a release build carries none of it. `WebPortal`'s page renders it into a "Debug log" `<pre>` fieldset at the bottom via a `{{DEBUG_LOG_SECTION}}` placeholder that only exists in `WebPortalTemplate.h` under the same `#ifdef` — a release build's template doesn't have the fieldset markup at all, not just an empty one. Like all other RAM state, the log does not survive deep sleep — it only ever shows traces from the current wake cycle, which is what a "what's happening right now" log is for anyway.
+- a door-action wake,
+- a WiFi service wake.
 
-The portal is the *only* window with WiFi (and therefore the only way to see the page or trigger a save) — it just now opens on every wake instead of only after a reset. The `/sleep` route exists to shorten that window on demand — hit it to deep-sleep immediately after saving a near-future test schedule, rather than waiting out the rest of the 5 minutes, so the real DS3231 `ext0` wake path (and `Scheduler`'s wake-lead arming) can be exercised quickly.
+A single wake cannot do both. If a door action should be followed by a WiFi session, it is scheduled as a second wake rather than being performed inline.
+
+That keeps actuation logic and portal logic strictly isolated.
+
+### Rule 3: alarm flags must be cleared twice
+
+This is the critical hardware correctness rule.
+
+The DS3231 alarm interrupt must be cleared:
+
+- immediately after waking, before interpreting the wake cause;
+- again immediately before every deep sleep.
+
+If either clear is skipped, the open-drain alarm line can remain asserted and the ESP32 wakes again immediately, creating a battery-draining loop.
+
+## 3. Modules and responsibilities
+
+### ConfigStore
+
+`ConfigStore` is the persistence layer. It wraps the ESP32 NVS namespace `doorcfg` and owns the `Config` structure.
+
+It persists:
+
+- latitude and longitude,
+- timezone,
+- schedule mode and absolute/sun-offset values,
+- last genuine motor event metadata,
+- scheduler debounce trigger,
+- motor timing configuration.
+
+This is the durable source of truth for configuration and state across sleep cycles.
+
+### RtcManager
+
+`RtcManager` wraps the DS3231 and stores the time and wake metadata.
+
+It is responsible for:
+
+- reading the RTC clock,
+- validating that the time is sane,
+- setting the next RTC alarm,
+- retaining the wake reason and requested action,
+- clearing the alarm flag.
+
+The RTC always stores UTC. The firmware converts to local time only when showing the wall-clock value or accepting user input.
+
+### TimeZone and TimeZones
+
+The project stores timezone as a named IANA-style zone string, not as a raw UTC offset. Conversion logic lives in `TimeZone` and `TimeZones.h`.
+
+This lets the UI and schedule math stay correct across DST transitions without requiring the user to re-save a fresh UTC value every time the offset changes.
+
+### Scheduler
+
+`Scheduler` is the timing brain.
+
+It is responsible for:
+
+- resolving schedule targets in UTC,
+- comparing current time to those targets,
+- deciding whether a scheduled action is due,
+- choosing the next alarm to arm,
+- sleeping again after finishing the current cycle.
+
+Important design points:
+
+- open and close schedules are resolved through a single dispatch function instead of duplicated logic;
+- a debounce saves the exact trigger minute in `Config::lastTriggerUnixTime`;
+- the debounce is narrower than a �done today� flag: it only suppresses the same scheduled trigger, not the entire day.
+
+This prevents a second poll or reboot from double-firing the same occurrence while still allowing the next real schedule occurrence to trigger normally.
+
+### DoorController
+
+`DoorController` is the only module allowed to touch the motor driver pins.
+
+It is responsible for:
+
+- motor direction selection,
+- timed motor run,
+- motor shutdown,
+- updating the persisted last-operation record.
+
+It has no scheduling logic and no �already there� check. It simply executes the command it was asked to perform.
+
+The separation is intentional:
+
+- `Scheduler` decides whether a move is due;
+- `DoorController` performs the actual move.
+
+### WebPortal
+
+`WebPortal` owns the WiFi configuration and service session.
+
+It serves the local web page and supports:
+
+- viewing the schedule,
+- editing settings,
+- syncing the RTC from the browser,
+- force-open / force-close requests,
+- immediate sleep for tests,
+- a lightweight ping endpoint used by the UI heartbeat.
+
+It does not trigger the motor directly during the active portal session. Instead, it requests a later wake for the door action. That cleanly separates configuration handling from actuation.
+
+## 4. Data flow
+
+The persistent data model is intentionally small and explicit.
+
+### Last operation vs trigger
+
+There are two distinct fields with different meaning:
+
+- `lastOperationAction` and `lastOperationUnixTime`: the real motor event, recorded after movement happens;
+- `lastTriggerUnixTime`: the schedule debounce key, used to prevent duplicate execution of the same target.
+
+They are related but not interchangeable. The first is historical evidence; the second is a scheduling safety gate.
+
+## 5. Wake sequencing
+
+A typical cycle looks like this:
+
+1. Boot from deep sleep.
+2. Clear the RTC alarm flag.
+3. Load configuration.
+4. Check if a door-action request is retained.
+5. If yes, perform the door action if still valid.
+6. If no, start or continue the WiFi service session.
+7. Arm the next scheduled door event or the next service wake.
+8. Sleep again.
+
+There is no in-memory session state carried over across cycles.
+
+## 6. Main actuation guard
+
+The critical decision point is the schedule window used before commanding the motor.
+
+In the current implementation, the test is:
+
+- current time must be on or after the target time,
+- and not beyond the small post-target grace window.
+
+This ensures the controller cannot fire early. The door may move at the target or shortly after it, but never before the requested trigger.
+
+That is the safety rule the rest of the architecture depends on.
+
+## 7. Important correctness constraints
+
+### RTC alarm clearing must happen twice
+
+This is not optional. The firmware must clear the alarm:
+
+- after wake handling,
+- immediately before each deep sleep.
+
+Otherwise the interrupt line can remain asserted and the device re-wakes immediately.
+
+### All schedule comparison should be in UTC
+
+The hardware clock stores UTC, and the schedule is resolved in UTC before any comparison or action. Local-time values are only used for display and user input.
+
+### All long-lived state belongs in persistent storage
+
+If a value matters after a sleep, it must be saved to NVS or the RTC. Global RAM is not a valid state boundary for this project.
+
+## 8. Summary
+
+The project is a deep-sleep battery controller that uses simple, explicit phases:
+
+- `main.cpp` decides what kind of wake this is;
+- `Scheduler` decides whether a scheduled action is due and what to arm next;
+- `DoorController` performs the physical movement;
+- `WebPortal` handles configuration and user requests;
+- `ConfigStore` and `RtcManager` preserve the durable state;
+- the schedule gate ensures that a door action is never earlier than requested.
+
+This is a deliberately conservative architecture: the device prefers correctness, clear wake boundaries, and explicit state persistence over a richer but riskier state machine.

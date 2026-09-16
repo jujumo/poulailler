@@ -10,9 +10,10 @@
 
 namespace {
 
-// Fire tolerance for scheduled handleDueActions() calls. Portal polling and
-// scheduled alarms both need a small window around the target.
-constexpr int kToleranceBeforeSec = -5;
+// Fire tolerance for scheduled handleDueActions() calls. A scheduled action
+// may only execute on or after the requested target; a short grace period is
+// allowed afterwards to absorb drift and the odd poll timing, but never before.
+constexpr int kToleranceBeforeSec = 0;
 constexpr int kToleranceAfterSec = 5;
 
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
