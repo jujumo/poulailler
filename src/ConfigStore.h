@@ -49,8 +49,9 @@ struct Config {
     // confused with, lastOperationUnixTime above. Holds the idealized,
     // minute-quantized open/close schedule TARGET (pinned to :00 seconds -
     // never the noisy wall-clock moment the motor actually started) that
-    // handleDueActions() last acted on: it compares its freshly-resolved
-    // target against this value and only fires if they differ, so two
+    // decideDoorAction() last acted on: it compares its freshly-resolved
+    // target against this value and only allows a new action if they differ,
+    // so two
     // polls landing in the same fire window - or a reboot that lands back
     // in it - don't double-fire. Deliberately narrower than the old
     // day-based "already done today" gates it replaces: any change to the

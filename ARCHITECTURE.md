@@ -42,7 +42,7 @@ That is why all decisions are re-derived on each wake instead of carried forward
 
 ### Rule 1: scheduled actions never fire early
 
-The schedule gate is in `Scheduler::handleDueActions()`.
+The schedule gate is in the wake-dispatch path in `main.cpp`, where the firmware decides whether a scheduled alarm is still valid before issuing the actual door action.
 
 The target is a UTC minute-of-day, and the comparison is against the current UTC second-of-day. The allowed condition is intentionally asymmetric:
 
@@ -129,7 +129,7 @@ Important design points:
 
 - open and close schedules are resolved through a single dispatch function instead of duplicated logic;
 - a debounce saves the exact trigger minute in `Config::lastTriggerUnixTime`;
-- the debounce is narrower than a “done today” flag: it only suppresses the same scheduled trigger, not the entire day.
+- the debounce is narrower than a ï¿½done todayï¿½ flag: it only suppresses the same scheduled trigger, not the entire day.
 
 This prevents a second poll or reboot from double-firing the same occurrence while still allowing the next real schedule occurrence to trigger normally.
 
@@ -144,7 +144,7 @@ It is responsible for:
 - motor shutdown,
 - updating the persisted last-operation record.
 
-It has no scheduling logic and no “already there” check. It simply executes the command it was asked to perform.
+It has no scheduling logic and no ï¿½already thereï¿½ check. It simply executes the command it was asked to perform.
 
 The separation is intentional:
 

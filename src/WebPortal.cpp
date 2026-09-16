@@ -106,7 +106,7 @@ struct ResolvedSchedule {
 
 // What a configured open/close schedule (absolute or sun-offset) actually
 // resolves to today, in both UTC and local time - the exact same
-// Scheduler::resolveUtcMinutes() computation handleDueActions() schedules
+// Scheduler::resolveUtcMinutes() computation the schedule decision uses
 // against, so this is never out of sync with what will really happen.
 // Recomputed fresh on every page load using today's date, rather than
 // stored, so it reflects today's DST status rather than a stale snapshot

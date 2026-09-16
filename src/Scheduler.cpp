@@ -10,8 +10,9 @@
 
 namespace {
 
-// Fire tolerance for scheduled handleDueActions() calls. A scheduled action
-// may only execute on or after the requested target; a short grace period is
+// Fire tolerance for scheduled action checks. A scheduled action may only
+// execute on or after the requested target; a short grace period is allowed
+// afterwards to absorb drift and the odd poll timing, but never before.
 // allowed afterwards to absorb drift and the odd poll timing, but never before.
 constexpr int kToleranceBeforeSec = 0;
 constexpr int kToleranceAfterSec = 5;
@@ -93,7 +94,7 @@ int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetM
 }
 
 // The one place "open or close?" is dispatched for schedule resolution -
-// handleDueActions()/armNextAlarmAndSleep() below and WebPortal's display
+// decideDoorAction()/armNextAlarmAndSleep() below and WebPortal's display
 // code all go through this instead of duplicating the field picks.
 int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
                             const DateTime& utcDay) {
@@ -105,84 +106,6 @@ int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
                               utcDay, cfg.timezone);
 }
 
-void handleDueActions(Config& cfg, RtcManager& rtc, DoorController& door,
-                      DoorAction requestedAction) {
-    if (requestedAction == DoorAction::OPENED) {
-        TRACE("[Scheduler] explicit open action");
-        door.open(cfg);
-        return;
-    }
-    if (requestedAction == DoorAction::CLOSED) {
-        TRACE("[Scheduler] explicit close action");
-        door.close(cfg);
-        return;
-    }
-
-    if (!rtc.isTimeValid()) {
-        // No valid time (never configured / lost power) - don't act on
-        // garbage time. armNextAlarmAndSleep() will handle the short retry.
-        return;
-    }
-
-    // Everything here runs in UTC - the DS3231 already stores it, and
-    // resolveUtcMinutes() converts the (local) configured times into it
-    // rather than the other way around.
-    DateTime now = rtc.now();
-    int nowMinutes = now.hour() * 60 + now.minute();
-    int nowSeconds = nowMinutes * 60 + now.second();
-
-    SunTimes sun = computeSunTimes(cfg, now.year(), now.month(), now.day());
-
-    int openMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/true, sun, now);
-    int closeMinutes = resolveScheduleMinutes(cfg, /*isOpen=*/false, sun, now);
-
-    // Scheduled actions use a tight time window. Explicit one-shot actions
-    // bypass that window but still dispatch through this scheduler-owned path.
-    bool openDue = inWindow(nowSeconds, openMinutes * 60);
-    bool closeDue = inWindow(nowSeconds, closeMinutes * 60);
-
-    // Basic debounce: compare against cfg.lastTriggerUnixTime - the last-
-    // ACTED-ON trigger (shared between open and close; see ConfigStore.h's
-    // comment on why one field is enough) - not the fire window itself, so
-    // the "one or two consecutive polls" case above (or a reboot that lands
-    // back in the same window) doesn't double-fire. The trigger is always
-    // minute-quantized (seconds=0, see resolveUtcMinutes()), so comparing
-    // it whole rather than flooring "now" to a minute is both simpler and
-    // exact: identical polls against an unchanged schedule always resolve
-    // to the identical trigger and get skipped, while a schedule that shifts
-    // by even a minute, or tomorrow's occurrence of the same time-of-day,
-    // resolves to a different value and fires normally. This is entirely
-    // separate from cfg.lastOperationUnixTime - see DoorController.h - which
-    // DoorController stamps itself with the real move time, not this value.
-    uint32_t openTriggerUnix =
-        DateTime(now.year(), now.month(), now.day(), openMinutes / 60, openMinutes % 60, 0)
-            .unixtime();
-    uint32_t closeTriggerUnix =
-        DateTime(now.year(), now.month(), now.day(), closeMinutes / 60, closeMinutes % 60, 0)
-            .unixtime();
-    bool openIsNewTrigger = openTriggerUnix != cfg.lastTriggerUnixTime;
-    bool closeIsNewTrigger = closeTriggerUnix != cfg.lastTriggerUnixTime;
-
-    TRACEF("[Scheduler] now=%02d:%02d:%02d UTC | open=%02d:%02d UTC due=%d newTrigger=%d | "
-           "close=%02d:%02d UTC due=%d newTrigger=%d",
-           nowMinutes / 60, nowMinutes % 60, now.second(), openMinutes / 60, openMinutes % 60,
-           openDue, openIsNewTrigger, closeMinutes / 60, closeMinutes % 60, closeDue,
-           closeIsNewTrigger);
-
-    // Sharing one field instead of one per action assumes open and close
-    // never resolve to the same trigger; if they ever are configured to the
-    // same time-of-day, whichever is checked first (open) wins and the
-    // other is treated as "already done" - not a supported configuration.
-    if (openDue && openIsNewTrigger) {
-        cfg.lastTriggerUnixTime = openTriggerUnix;
-        door.open(cfg);  // persists cfg, including the trigger line above
-    }
-    if (closeDue && closeIsNewTrigger) {
-        cfg.lastTriggerUnixTime = closeTriggerUnix;
-        door.close(cfg);  // persists cfg, including the trigger line above
-    }
-}
-
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     if (!rtc.isTimeValid()) {
         // Without a valid RTC there is no meaningful scheduled event to arm.
@@ -191,7 +114,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
         sleepForWifi(rtc, 1);
     }
 
-    // Everything here runs in UTC - see handleDueActions().
+    // Everything here runs in UTC - see decideDoorAction().
     DateTime now = rtc.now();
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     int nowSeconds = (now.hour() * 60 + now.minute()) * 60 + now.second();
@@ -212,7 +135,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     // already past and an 18:00 close still ahead: naively arming the
     // earlier clock-time of the two, 08:00, would silently swallow today's
     // close). This is independent of whether either has already fired -
-    // handleDueActions() has no memory of that, and neither does this.
+    // decideDoorAction() has no memory of that, and neither does this.
     bool openUpcoming = nowSeconds <= openTodayMin * 60 + kToleranceAfterSec;
     bool closeUpcoming = nowSeconds <= closeTodayMin * 60 + kToleranceAfterSec;
 

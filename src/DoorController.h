@@ -8,7 +8,7 @@
 
 // Always moves the motor when asked - it has no notion of "already there"
 // to skip against; whether to call open()/close() at all, and when, is
-// entirely the caller's decision (see Scheduler::handleDueActions() and
+// entirely the caller's decision (see Scheduler::decideDoorAction() and
 // WebPortal's Force Open/Close). After a move, self-timestamps via its own
 // RtcManager and records cfg.lastOperationAction (which) and
 // cfg.lastOperationUnixTime (when it REALLY happened) unconditionally,
