@@ -39,8 +39,10 @@ flowchart TD
 
 - **Normal scheduled door action:** retain the resolved UTC trigger timestamp
   when arming the RTC. On `EXT1`, compare the current UTC timestamp with it;
-  perform the action only within +/-2 minutes. Otherwise skip the motor,
-  clear the fired alarm, and arm the next door event before sleeping.
+  perform the action only from the target through the following two minutes.
+  If the wake is early, skip the motor, clear the fired alarm, and re-arm the
+  same target before returning to deep sleep. If the wake is more than two
+  minutes late, skip the stale action and arm the next door event.
 - **Debug door action:** wake, perform the action, preserve the WiFi request,
   and sleep until `now + 2 seconds`. The next session serves WiFi.
 - **WiFi service:** wake, serve WiFi, consume the WiFi request, compute the
@@ -76,8 +78,9 @@ npx -y @mermaid-js/mermaid-cli -i doc/operation-sequence.mmd -o doc/operation-se
   wake, optionally followed by another WiFi wake.
 - **Scheduled movement is timestamp-gated.** `DoorController::open()`/`close()`
   always drives the motor when called. A scheduled `EXT1` wake calls it only
-  when the current UTC timestamp is within +/-2 minutes of the retained alarm
-  timestamp; explicit web actions bypass that check.
+  when the current UTC timestamp is at or after, and no more than two minutes
+  after, the retained alarm timestamp. An early wake re-arms that same target;
+  explicit web actions bypass the scheduled check.
 - **Web open/close requests are deferred actions.** The portal closes WiFi and
   arms a one-second wake with `AlarmOperateDoor::door_open` or
   `AlarmOperateDoor::door_close` and `AlarmWifiUp=true`; the motor is never

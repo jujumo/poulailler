@@ -54,6 +54,10 @@ The lower bound is explicitly `0` seconds, so the logic permits a near-boundary 
 
 This is the main safety check that prevents the door from opening or closing early than requested.
 
+If the RTC wakes before the target, the motor action is skipped and the
+retained target is armed again during the normal sleep transition. The ESP32
+therefore returns to deep sleep instead of waiting awake for the target.
+
 ### Rule 2: door actions and WiFi are separate phases
 
 The firmware distinguishes two kinds of wake:

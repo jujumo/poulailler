@@ -5,8 +5,8 @@ flowchart TD
     C -->|Yes| D{WiFi requested?}
     D -->|Yes| E[Perform immediate open or close action]
     D -->|No| F[Compare current UTC with retained alarm UTC]
-    F -->|Within +/-2 minutes| G[Perform scheduled open or close action]
-    F -->|Outside window| H[Skip motor action]
+    F -->|At target through +2 minutes| G[Perform scheduled open or close action]
+    F -->|Early or stale| H[Skip motor action and re-arm appropriate event]
 
     E --> I{WiFi request active?}
     G --> I

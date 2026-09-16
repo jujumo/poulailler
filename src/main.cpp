@@ -130,7 +130,7 @@ void setup() {
             DateTime now = rtc.now();
             int64_t offsetSeconds = static_cast<int64_t>(now.unixtime()) -
                                     static_cast<int64_t>(rtc.alarmRequestUnixTime());
-            bool scheduledAlarmInWindow = offsetSeconds >= -120 && offsetSeconds <= 120;
+            bool scheduledAlarmInWindow = Scheduler::scheduledAlarmInWindow(offsetSeconds);
             TRACEF("[Boot] scheduled alarm actual=%lu requested=%lu offset=%llds allowed=%d",
                    static_cast<unsigned long>(now.unixtime()),
                    static_cast<unsigned long>(rtc.alarmRequestUnixTime()),
@@ -142,7 +142,7 @@ void setup() {
                     door.close(cfg);
                 }
             } else {
-                TRACE("[Boot] scheduled alarm outside +/-2 minute window; skipping action");
+                TRACE("[Boot] scheduled alarm outside 0..+2 minute window; skipping action");
             }
         } else {
             TRACE("[Boot] scheduled alarm has invalid RTC time; skipping action");

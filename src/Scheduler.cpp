@@ -10,12 +10,13 @@
 
 namespace {
 
-// Fire tolerance for scheduled action checks. A scheduled action may only
-// execute on or after the requested target; a short grace period is allowed
-// afterwards to absorb drift and the odd poll timing, but never before.
-// allowed afterwards to absorb drift and the odd poll timing, but never before.
-constexpr int kToleranceBeforeSec = 0;
+// Scheduler selection tolerance: keep an event eligible for a few seconds
+// after its target while the boot that should consume it is starting.
 constexpr int kToleranceAfterSec = 5;
+
+// Scheduled wake validation tolerance. This is deliberately asymmetric:
+// early wakes must wait for the RTC to reach the requested target.
+constexpr int kScheduledAlarmToleranceAfterSec = 120;
 
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
 constexpr uint64_t kFallbackSleepSeconds = 24ULL * 3600ULL;
@@ -25,14 +26,6 @@ int normalizeMinutes(int minutes) {
     minutes %= 1440;
     if (minutes < 0) minutes += 1440;
     return minutes;
-}
-
-// Both arguments are seconds-of-day; target is always at :00 (open/close
-// targets are resolved to whole minutes), compared against "now" including
-// its seconds so the window can be tight.
-bool inWindow(int nowSeconds, int targetSeconds) {
-    return nowSeconds >= targetSeconds + kToleranceBeforeSec &&
-           nowSeconds <= targetSeconds + kToleranceAfterSec;
 }
 
 [[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool enableRtcWakeup) {
@@ -104,6 +97,10 @@ int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
     int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
     return resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes, sunEventUtcMinutes, sun.valid,
                               utcDay, cfg.timezone);
+}
+
+bool scheduledAlarmInWindow(int64_t offsetSeconds) {
+    return offsetSeconds >= 0 && offsetSeconds <= kScheduledAlarmToleranceAfterSec;
 }
 
 void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
