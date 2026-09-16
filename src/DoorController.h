@@ -20,15 +20,20 @@ public:
     DoorController(ConfigStore& store, RtcManager& rtc);
 
     void begin();
-    void signalReady(const Config& cfg);
+    void jitter(const Config& cfg);
 
     void open(Config& cfg);
     void close(Config& cfg);
 
 private:
-    void setDirection(DoorAction action, bool invert);
-    void run(Config& cfg, DoorAction action);
-    void stopMotor();
+    enum class Direction : uint8_t {
+        OPEN,
+        CLOSE,
+    };
+
+    void startMoving(Direction direction);
+    void stopMoving();
+    void operateDoor(uint32_t durationMs, Direction direction);
 
     ConfigStore& store_;
     RtcManager& rtc_;

@@ -157,7 +157,7 @@ void setup() {
         // reset and fallback-timer wakes; a timer must never execute a
         // retained door operation early.
         wifiRequested = true;
-        door.signalReady(cfg);
+        door.jitter(cfg);
         TRACE("[Boot] WiFi wake: starting portal");
         WebPortal portal(store, rtc);
         WebPortalRequest webRequest;
