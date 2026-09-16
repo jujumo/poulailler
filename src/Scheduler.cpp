@@ -277,8 +277,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
            openUpcoming, closeUpcoming, wakeAt.hour(), wakeAt.minute(), wakeAt.second());
 #endif
 
-    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(),
-                     nextOperation, false);
+    rtc.setNextAlarm(wakeAt, nextOperation, false);
     rtc.clearAlarm();
 
     goToSleep(kFallbackSleepSeconds, true);
@@ -286,8 +285,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
 
 [[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds) {
     DateTime wakeAt = rtc.now() + TimeSpan(seconds);
-    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(),
-                     AlarmOperateDoor::no_door_operation, true);
+    rtc.setNextAlarm(wakeAt, AlarmOperateDoor::no_door_operation, true);
     rtc.clearAlarm();
     goToSleep(kDebugSleepFallbackSeconds, true);
 }
@@ -295,7 +293,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
 [[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
                                      AlarmOperateDoor operation, bool wifiUp) {
     DateTime wakeAt = rtc.now() + TimeSpan(seconds);
-    rtc.setNextAlarm(wakeAt.hour(), wakeAt.minute(), wakeAt.second(), operation, wifiUp);
+    rtc.setNextAlarm(wakeAt, operation, wifiUp);
     rtc.clearAlarm();
     goToSleep(kDebugSleepFallbackSeconds, true);
 }

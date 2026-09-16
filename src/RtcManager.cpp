@@ -8,6 +8,7 @@
 namespace {
 RTC_DATA_ATTR AlarmOperateDoor retainedAlarmOperateDoor = AlarmOperateDoor::no_door_operation;
 RTC_DATA_ATTR bool retainedAlarmWifiUp = false;
+RTC_DATA_ATTR uint32_t retainedAlarmRequestUnixTime = 0;
 }
 
 bool RtcManager::begin() {
@@ -40,14 +41,15 @@ void RtcManager::setTime(const DateTime& dt) {
     rtc_.adjust(dt);
 }
 
-void RtcManager::setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second,
+void RtcManager::setNextAlarm(const DateTime& alarmTime,
                               AlarmOperateDoor operateDoor, bool wifiUp) {
-    // Date/day fields are ignored in DS3231_A1_Hour mode - only h:m:s matter.
-    DateTime alarmTime(2000, 1, 1, hour, minute, second);
+    // Date/day fields are ignored in DS3231_A1_Hour mode; retain the full UTC
+    // timestamp so a wake can be checked against the intended occurrence.
     rtc_.clearAlarm(1);
     rtc_.setAlarm1(alarmTime, DS3231_A1_Hour);
     retainedAlarmOperateDoor = operateDoor;
     retainedAlarmWifiUp = wifiUp;
+    retainedAlarmRequestUnixTime = alarmTime.unixtime();
 }
 
 AlarmOperateDoor RtcManager::alarmOperateDoor() const {
@@ -56,6 +58,10 @@ AlarmOperateDoor RtcManager::alarmOperateDoor() const {
 
 bool RtcManager::alarmWifiUp() const {
     return retainedAlarmWifiUp;
+}
+
+uint32_t RtcManager::alarmRequestUnixTime() const {
+    return retainedAlarmRequestUnixTime;
 }
 
 void RtcManager::clearAlarm() {

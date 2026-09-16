@@ -2,23 +2,24 @@ flowchart TD
     A[setup starts] --> B[Load config, RTC, and saved flags]
     B --> C{Door action requested?}
 
-    C -->|Yes| D[Perform open or close action]
-    D --> E{Was this a debug action with WiFi requested?}
+    C -->|Yes| D{WiFi requested?}
+    D -->|Yes| E[Perform immediate open or close action]
+    D -->|No| F[Compare current UTC with retained alarm UTC]
+    F -->|Within +/-2 minutes| G[Perform scheduled open or close action]
+    F -->|Outside window| H[Skip motor action]
 
-    E -->|Yes| F[Keep WiFi request active]
-    E -->|No| G[Clear WiFi request]
+    E --> I{WiFi request active?}
+    G --> I
+    H --> I
 
-    C -->|No| H[WiFi request must be active]
-    H --> I[Serve WiFi]
-    I --> J[Consume WiFi request]
+    C -->|No| J[WiFi request must be active]
+    J --> K[Serve WiFi]
+    K --> L[Consume WiFi request]
+    L --> I
 
-    F --> K{WiFi request active?}
-    G --> K
-    J --> K
+    I -->|Yes| M[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
+    M --> N[Go to sleep: now + 2 seconds]
 
-    K -->|Yes| L[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
-    L --> M[Go to sleep: now + 2 seconds]
-
-    K -->|No| N[Compute next door event]
-    N --> O[Set alarm: next open or close<br/>Flags: door action active, WiFi inactive]
-    O --> P[Go to sleep: next door event]
+    I -->|No| O[Compute next door event]
+    O --> P[Set alarm: next open or close<br/>Retain UTC timestamp and door reason]
+    P --> Q[Go to sleep: next door event]

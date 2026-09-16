@@ -120,10 +120,33 @@ void setup() {
 
     if (doorActionRequested) {
         TRACE("[Boot] door-operation wake: operating without WiFi");
-        DoorAction requestedAction = operation == AlarmOperateDoor::door_open
-                                         ? DoorAction::OPENED
-                                         : DoorAction::CLOSED;
-        Scheduler::handleDueActions(cfg, rtc, door, requestedAction);
+        if (wifiRequested) {
+            if (operation == AlarmOperateDoor::door_open) {
+                door.open(cfg);
+            } else {
+                door.close(cfg);
+            }
+        } else if (rtc.isTimeValid()) {
+            DateTime now = rtc.now();
+            int64_t offsetSeconds = static_cast<int64_t>(now.unixtime()) -
+                                    static_cast<int64_t>(rtc.alarmRequestUnixTime());
+            bool scheduledAlarmInWindow = offsetSeconds >= -120 && offsetSeconds <= 120;
+            TRACEF("[Boot] scheduled alarm actual=%lu requested=%lu offset=%llds allowed=%d",
+                   static_cast<unsigned long>(now.unixtime()),
+                   static_cast<unsigned long>(rtc.alarmRequestUnixTime()),
+                   static_cast<long long>(offsetSeconds), scheduledAlarmInWindow);
+            if (scheduledAlarmInWindow) {
+                if (operation == AlarmOperateDoor::door_open) {
+                    door.open(cfg);
+                } else {
+                    door.close(cfg);
+                }
+            } else {
+                TRACE("[Boot] scheduled alarm outside +/-2 minute window; skipping action");
+            }
+        } else {
+            TRACE("[Boot] scheduled alarm has invalid RTC time; skipping action");
+        }
         // A debug action requests a separate WiFi session. A scheduled action
         // consumes any WiFi request and goes directly to the next schedule.
         if (!wifiRequested) {

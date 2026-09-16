@@ -12,43 +12,48 @@ flowchart TD
     A[setup starts] --> B[Load config, RTC, and saved flags]
     B --> C{Door action requested?}
 
-    C -->|Yes| D[Perform open or close action]
-    D --> E{Was this a debug action with WiFi requested?}
+  C -->|Yes| D{WiFi requested?}
+  D -->|Yes| E[Perform immediate open or close action]
+  D -->|No| F[Compare current UTC with retained alarm UTC]
+  F -->|Within +/-2 minutes| G[Perform scheduled open or close action]
+  F -->|Outside window| H[Skip motor action]
 
-    E -->|Yes| F[Keep WiFi request active]
-    E -->|No| G[Clear WiFi request]
+  E --> I{WiFi request active?}
+  G --> I
+  H --> I
 
-    C -->|No| H[WiFi request must be active]
-    H --> I[Serve WiFi]
-    I --> J[Consume WiFi request]
+  C -->|No| J[WiFi request must be active]
+  J --> K[Serve WiFi]
+  K --> L[Consume WiFi request]
+  L --> I
 
-    F --> K{WiFi request active?}
-    G --> K
-    J --> K
+  I -->|Yes| M[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
+  M --> N[Go to sleep: now + 2 seconds]
 
-    K -->|Yes| L[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
-    L --> M[Go to sleep: now + 2 seconds]
-
-    K -->|No| N[Compute next door event]
-    N --> O[Set alarm: next open or close<br/>Flags: door action active, WiFi inactive]
-    O --> P[Go to sleep: next door event]
+  I -->|No| O[Compute next door event]
+  O --> P[Set alarm: next open or close<br/>Retain UTC timestamp and door reason]
+  P --> Q[Go to sleep: next door event]
 ```
 
 ### Session behavior
 
-- **Normal scheduled door action:** wake, perform the door action, clear the
-  WiFi request, compute the next door event, and sleep until that event.
+- **Normal scheduled door action:** retain the resolved UTC trigger timestamp
+  when arming the RTC. On `EXT1`, compare the current UTC timestamp with it;
+  perform the action only within +/-2 minutes. Otherwise skip the motor,
+  clear the fired alarm, and arm the next door event before sleeping.
 - **Debug door action:** wake, perform the action, preserve the WiFi request,
   and sleep until `now + 2 seconds`. The next session serves WiFi.
 - **WiFi service:** wake, serve WiFi, consume the WiFi request, compute the
   next door event, and sleep until that event.
 
 Every wake — power-on/reset, DS3231 alarm (`EXT1`), or the fallback timer
-(`TIMER`) — is classified using the hardware cause and retained
-two retained alarm fields: `AlarmOperateDoor` and `AlarmWifiUp`. A door
-operation always runs first without WiFi. If `AlarmWifiUp` is true, the next
-alarm is a separate WiFi-only wake. Otherwise the next alarm is the scheduled
-door event. A WiFi-only wake runs the portal until timeout or a user request.
+(`TIMER`) — is classified using the hardware cause and three retained alarm
+fields: `AlarmOperateDoor`, `AlarmWifiUp`, and the UTC requested alarm
+timestamp. A door operation always runs first without WiFi.
+ Scheduled door operations validate the timestamp before moving; an
+ `AlarmWifiUp` action is explicit and immediate, followed by a separate
+ WiFi-only wake. Otherwise the next alarm is the scheduled door event. A
+ WiFi-only wake runs the portal until timeout or a user request.
 There is no in-RAM state carried between iterations:
 everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
 
@@ -69,13 +74,10 @@ npx -y @mermaid-js/mermaid-cli -i doc/operation-sequence.mmd -o doc/operation-se
 - **The portal owns only WiFi sessions.** A WiFi-only wake runs it until timeout
   or a user command. Open/close commands schedule a separate door operation
   wake, optionally followed by another WiFi wake.
-- **No idempotency anywhere.** `DoorController::open()`/`close()` always
-  drives the motor when called; `Scheduler` decides *whether* to call it
-  purely from "is `now` inside the fire window" with no "already done today"
-  memory. Safety against double-firing comes from the fire window being a
-  few seconds wide combined with `armNextAlarmAndSleep()` waking at the target
-  — not from any persisted state. Explicit web actions use the same scheduler
-  entry point but do not modify the schedule trigger debounce.
+- **Scheduled movement is timestamp-gated.** `DoorController::open()`/`close()`
+  always drives the motor when called. A scheduled `EXT1` wake calls it only
+  when the current UTC timestamp is within +/-2 minutes of the retained alarm
+  timestamp; explicit web actions bypass that check.
 - **Web open/close requests are deferred actions.** The portal closes WiFi and
   arms a one-second wake with `AlarmOperateDoor::door_open` or
   `AlarmOperateDoor::door_close` and `AlarmWifiUp=true`; the motor is never

@@ -25,15 +25,16 @@ public:
     DateTime now();
     void setTime(const DateTime& dt);
 
-    // Arms Alarm1 for the next occurrence of hour:minute:second and enables
-    // the alarm interrupt on the INT/SQW pin.
-    void setNextAlarm(uint8_t hour, uint8_t minute, uint8_t second,
+    // Arms Alarm1 for the next occurrence of alarmTime's time-of-day and
+    // retains its UTC timestamp with the wake reason.
+    void setNextAlarm(const DateTime& alarmTime,
                       AlarmOperateDoor operateDoor, bool wifiUp);
 
     // Returns the operation and WiFi stages recorded when the current
     // deep-sleep alarm was armed. A cold boot has no retained operation.
     AlarmOperateDoor alarmOperateDoor() const;
     bool alarmWifiUp() const;
+    uint32_t alarmRequestUnixTime() const;
 
     // Arms the next RTC alarm and records the staged wake behavior.
 
