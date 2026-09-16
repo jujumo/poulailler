@@ -35,6 +35,22 @@ String minutesToHhMm(int minutes) {
     return String(buf);
 }
 
+int utcMinutesToLocalMinutesForDisplay(int utcMinutes, const DateTime& utcDay,
+                                       const char* zoneName) {
+    DateTime utcTarget(utcDay.year(), utcDay.month(), utcDay.day(), utcMinutes / 60,
+                       utcMinutes % 60, 0);
+    DateTime localTarget = TimeZone::toLocal(utcTarget, zoneName).dt;
+    return localTarget.hour() * 60 + localTarget.minute();
+}
+
+int localMinutesToUtcMinutesForStorage(int localMinutes, const DateTime& utcDay,
+                                      const char* zoneName) {
+    DateTime localTarget(utcDay.year(), utcDay.month(), utcDay.day(), localMinutes / 60,
+                         localMinutes % 60, 0);
+    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
+    return utcTarget.hour() * 60 + utcTarget.minute();
+}
+
 bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
 
 struct SunEvent {
@@ -287,7 +303,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{TIMEZONE_OPTIONS}}", buildTimezoneOptions(cfg_.timezone));
 
     html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
-    html.replace("{{OPEN_ABS}}", minutesToHhMm(cfg_.openAbsMinutes));
+    html.replace("{{OPEN_ABS}}",
+                 minutesToHhMm(utcMinutesToLocalMinutesForDisplay(cfg_.openAbsMinutes, rtc_.now(),
+                                                                 cfg_.timezone)));
     html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
     SunEvent sunrise = nextSunEvent(cfg_, rtc_, /*sunrise=*/true);
@@ -298,7 +316,9 @@ String WebPortal::buildIndexHtml() {
     html.replace("{{OPEN_LOCAL}}", openResolved.local);
 
     html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
-    html.replace("{{CLOSE_ABS}}", minutesToHhMm(cfg_.closeAbsMinutes));
+    html.replace("{{CLOSE_ABS}}",
+                 minutesToHhMm(utcMinutesToLocalMinutesForDisplay(cfg_.closeAbsMinutes, rtc_.now(),
+                                                                  cfg_.timezone)));
     html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
     html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
     SunEvent sunset = nextSunEvent(cfg_, rtc_, /*sunrise=*/false);
@@ -370,7 +390,13 @@ void WebPortal::handleSaveConfig() {
     }
     if (server_.hasArg("openAbs")) {
         int m = parseHhMmToMinutes(server_.arg("openAbs"));
-        if (m >= 0) next.openAbsMinutes = static_cast<uint16_t>(m); else ok = false;
+        if (m >= 0) {
+            DateTime now = rtc_.isTimeValid() ? rtc_.now() : DateTime(2025, 1, 1, 0, 0, 0);
+            next.openAbsMinutes = static_cast<uint16_t>(
+                localMinutesToUtcMinutesForStorage(m, now, next.timezone));
+        } else {
+            ok = false;
+        }
     }
     if (server_.hasArg("openSunOff")) {
         int v = server_.arg("openSunOff").toInt();
@@ -383,7 +409,13 @@ void WebPortal::handleSaveConfig() {
     }
     if (server_.hasArg("closeAbs")) {
         int m = parseHhMmToMinutes(server_.arg("closeAbs"));
-        if (m >= 0) next.closeAbsMinutes = static_cast<uint16_t>(m); else ok = false;
+        if (m >= 0) {
+            DateTime now = rtc_.isTimeValid() ? rtc_.now() : DateTime(2025, 1, 1, 0, 0, 0);
+            next.closeAbsMinutes = static_cast<uint16_t>(
+                localMinutesToUtcMinutesForStorage(m, now, next.timezone));
+        } else {
+            ok = false;
+        }
     }
     if (server_.hasArg("closeSunOff")) {
         int v = server_.arg("closeSunOff").toInt();

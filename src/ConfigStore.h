@@ -29,11 +29,11 @@ struct Config {
     char timezone[24] = "Europe/Paris";
 
     ScheduleMode openMode = ScheduleMode::ABSOLUTE;
-    uint16_t openAbsMinutes = 420;     // 07:00
+    uint16_t openAbsMinutes = 420;     // UTC minute-of-day; local time only in web UI
     int16_t openSunOffsetMinutes = 0;  // relative to sunrise
 
     ScheduleMode closeMode = ScheduleMode::ABSOLUTE;
-    uint16_t closeAbsMinutes = 1140;   // 19:00
+    uint16_t closeAbsMinutes = 1140;   // UTC minute-of-day; local time only in web UI
     int16_t closeSunOffsetMinutes = 0; // relative to sunset
 
     // What DoorController last actually did, and when it really happened -

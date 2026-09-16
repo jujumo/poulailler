@@ -77,33 +77,18 @@ SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
     return result;
 }
 
-// Converts a configured LOCAL absolute time-of-day (as entered in the web
-// UI) to the UTC minute-of-day it corresponds to on the given UTC calendar
-// day. Computed fresh on every call rather than cached/stored, so a DST
-// transition between now and the target is picked up automatically - no
-// manual re-save needed twice a year.
-int localAbsMinutesToUtc(uint16_t localMinutes, const DateTime& utcDay, const char* zoneName) {
-    DateTime localTarget(utcDay.year(), utcDay.month(), utcDay.day(), localMinutes / 60,
-                          localMinutes % 60, 0);
-    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
-    return utcTarget.hour() * 60 + utcTarget.minute();
-}
-
-// Resolves a configured open/close schedule to a UTC minute-of-day for the
-// given UTC calendar day. Sun-offset mode is already UTC-native (see
-// computeSunTimes()) so it needs no conversion; absolute mode is
-// user-entered local time and must be resolved per calendar day via
-// localAbsMinutesToUtc() above. Falls back to absolute if sun-offset mode
-// is selected but sunrise/sunset could not be computed (e.g. polar
-// day/night). Exposed (not file-local) so WebPortal can show the user the
-// same resolved time it's actually scheduled against.
+// Fixed-time schedules are stored in UTC minute-of-day (the RTC stores UTC,
+// and all scheduling math compares against UTC) - local wall-clock values are
+// only used in the web UI and converted to UTC at save time.
 int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
                        int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
                        const char* zoneName) {
+    (void)utcDay;
+    (void)zoneName;
     if (mode == ScheduleMode::SUN_OFFSET && sunValid) {
         return normalizeMinutes(sunEventUtcMinutes + sunOffsetMinutes);
     }
-    return localAbsMinutesToUtc(absMinutes, utcDay, zoneName);
+    return normalizeMinutes(absMinutes);
 }
 
 // The one place "open or close?" is dispatched for schedule resolution -
