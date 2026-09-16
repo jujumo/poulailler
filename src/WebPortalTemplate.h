@@ -102,27 +102,44 @@ function formatClock(totalMinutes){
     return (hours < 10 ? '0' : '') + hours + ':' + (minutes < 10 ? '0' : '') + minutes;
 }
 
+function renderLocalUtcPreview(localValue, localRef, utcRef){
+    if (localValue === null || localRef === null || utcRef === null) {
+        return null;
+    }
+    var utcValue = utcRef + (localValue - localRef);
+    return formatClock(localValue) + ' local (' + formatClock(utcValue) + ' UTC)';
+}
+
 function updatePreview(modeName, absoluteName, offsetName, eventLocalId, eventUtcId, previewId){
     var mode = document.querySelector("input[name='" + modeName + "']:checked");
     var preview = document.getElementById(previewId);
     if (!mode) return;
 
-    if (mode.value === 'absolute') {
-        var absolute = document.querySelector("input[name='" + absoluteName + "']").value;
-        preview.textContent = absolute ? 'Preview: ' + absolute + ' local (fixed time)' : 'Preview unavailable: enter a time.';
+    var localEvent = parseClock(document.getElementById(eventLocalId).textContent);
+    var utcEvent = parseClock(document.getElementById(eventUtcId).textContent);
+    if (localEvent === null || utcEvent === null) {
+        preview.textContent = 'Preview unavailable: sync time first.';
         return;
     }
 
-    var localEvent = parseClock(document.getElementById(eventLocalId).textContent);
-    var utcEvent = parseClock(document.getElementById(eventUtcId).textContent);
-    var offsetText = document.querySelector("input[name='" + offsetName + "']").value.trim();
-    var offset = offsetText === '' ? NaN : Number(offsetText);
-    if (localEvent === null || utcEvent === null || !Number.isInteger(offset)) {
-        preview.textContent = 'Preview unavailable: sync time and enter a whole-minute offset.';
+    if (mode.value === 'absolute') {
+        var absolute = document.querySelector("input[name='" + absoluteName + "']").value;
+        var absoluteLocal = parseClock(absolute);
+        if (absoluteLocal === null) {
+            preview.textContent = 'Preview unavailable: enter a time.';
+            return;
+        }
+        preview.textContent = 'Preview: ' + renderLocalUtcPreview(absoluteLocal, localEvent, utcEvent);
         return;
     }
-    preview.textContent = 'Preview: ' + formatClock(localEvent + offset) + ' local (' +
-        formatClock(utcEvent + offset) + ' UTC)';
+
+    var offsetText = document.querySelector("input[name='" + offsetName + "']").value.trim();
+    var offset = offsetText === '' ? NaN : Number(offsetText);
+    if (!Number.isInteger(offset)) {
+        preview.textContent = 'Preview unavailable: enter a whole-minute offset.';
+        return;
+    }
+    preview.textContent = 'Preview: ' + renderLocalUtcPreview(localEvent + offset, localEvent, utcEvent);
 }
 
 function updateDoorPreviews(){
