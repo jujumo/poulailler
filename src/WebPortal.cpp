@@ -35,18 +35,20 @@ String minutesToHhMm(int minutes) {
     return String(buf);
 }
 
-int utcMinutesToLocalMinutesForDisplay(int utcMinutes, const DateTime& utcDay,
+int utcMinutesToLocalMinutesForDisplay(int utcMinutes, const DateTime& utcNow,
                                        const char* zoneName) {
-    DateTime utcTarget(utcDay.year(), utcDay.month(), utcDay.day(), utcMinutes / 60,
+    TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, zoneName);
+    DateTime utcTarget(localNow.dt.year(), localNow.dt.month(), localNow.dt.day(), utcMinutes / 60,
                        utcMinutes % 60, 0);
     DateTime localTarget = TimeZone::toLocal(utcTarget, zoneName).dt;
     return localTarget.hour() * 60 + localTarget.minute();
 }
 
-int localMinutesToUtcMinutesForStorage(int localMinutes, const DateTime& utcDay,
+int localMinutesToUtcMinutesForStorage(int localMinutes, const DateTime& utcNow,
                                       const char* zoneName) {
-    DateTime localTarget(utcDay.year(), utcDay.month(), utcDay.day(), localMinutes / 60,
-                         localMinutes % 60, 0);
+    TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, zoneName);
+    DateTime localTarget(localNow.dt.year(), localNow.dt.month(), localNow.dt.day(),
+                         localMinutes / 60, localMinutes % 60, 0);
     DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
     return utcTarget.hour() * 60 + utcTarget.minute();
 }
