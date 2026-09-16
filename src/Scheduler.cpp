@@ -16,7 +16,7 @@ constexpr int kToleranceBeforeSec = -5;
 constexpr int kToleranceAfterSec = 5;
 
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
-constexpr uint64_t kFallbackSleepSeconds = 6ULL * 3600ULL;
+constexpr uint64_t kFallbackSleepSeconds = 24ULL * 3600ULL;
 constexpr uint64_t kDebugSleepFallbackSeconds = 60ULL;
 
 int normalizeMinutes(int minutes) {

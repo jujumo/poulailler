@@ -143,7 +143,7 @@ This project was written and built without physical hardware in the loop
 - DS3231 alarm interrupt wiring: confirm `INT/SQW` genuinely pulls the
   ESP32 out of deep sleep (GPIO15, `ext0`, wake-on-LOW) — a missing pull-up
   or wrong pin can silently break this and leave you dependent on the
-  6-hour fallback timer only.
+  24-hour fallback timer only.
 
 ## Design notes
 
@@ -162,7 +162,7 @@ This project was written and built without physical hardware in the loop
   ignore date" mode, so the hardware itself resolves "today or tomorrow" —
   firmware just picks *which* time-of-day to arm (soonest of: today's
   remaining open, today's remaining close, tomorrow's open).
-- A 6-hour timer wakeup is always armed alongside the RTC alarm as a safety
+- A 24-hour timer wakeup is always armed alongside the RTC alarm as a safety
   net against a missed/misconfigured alarm.
 - The DS3231 alarm flag is cleared both right after handling a wake and
   again immediately before every sleep — if this is ever skipped, the
