@@ -281,6 +281,7 @@ String WebPortal::buildIndexHtml() {
         statusMessage_ = "";
     }
     html.replace("{{STATUS_BLOCK}}", statusBlock);
+    html.replace("{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__);
 
     DateTime utcNow = rtc_.now();
     TimeZone::LocalTime local = TimeZone::toLocal(utcNow, cfg_.timezone);

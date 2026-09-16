@@ -31,6 +31,7 @@ button{padding:.6em 1em;margin-top:.5em}
 .preview{font-weight:bold}
 </style></head><body>
 <h2>Coop Door Setup</h2>
+<p>Compiled: {{COMPILE_TIME}}</p>
 <p>This configuration window is only open for 5 minutes after power-on. Power-cycle the board to reopen it.</p>
 <div id='moveWarn' class='warn'>&#9888; The door may be moving right now &mdash; this page can stop responding for up to {{MOTOR_MAX_RUN_MS}}ms while it does. It will recover on its own once the move finishes.</div>
 {{STATUS_BLOCK}}
