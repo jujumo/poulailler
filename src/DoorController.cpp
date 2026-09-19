@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 #include "Debug.h"
-#include "config.h"
+#include "build_config.h"
 
 DoorController::DoorController(ConfigStore& store, RtcManager& rtc) : store_(store), rtc_(rtc) {}
 
@@ -38,9 +38,6 @@ void DoorController::open(Config& cfg) {
     TRACE("[Door] opening");
     operateDoor(cfg.motorOpenDurationMs, direction);
 
-    cfg.lastOperationAction = DoorAction::OPENED;
-    cfg.lastOperationUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
-    store_.save(cfg);
     TRACE("[Door] opened");
 }
 
@@ -49,9 +46,6 @@ void DoorController::close(Config& cfg) {
     TRACE("[Door] closing");
     operateDoor(cfg.motorCloseDurationMs, direction);
 
-    cfg.lastOperationAction = DoorAction::CLOSED;
-    cfg.lastOperationUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
-    store_.save(cfg);
     TRACE("[Door] closed");
 }
 

@@ -22,3 +22,8 @@ constexpr uint32_t kMotorOpenDurationMs = 4500;
 // WiFi access point served for 5 minutes right after power-on/reset.
 #define WIFI_AP_SSID "CoopDoor"
 #define WIFI_AP_PASSWORD "123456789"  // WPA2, >=8 chars
+
+// default config settings
+#define DEFAULT_LATITUE 45.1885f
+#define DEFAULT_LONGITUDE 5.7245f
+#define DEFAULT_UTC_OFFSET 2

@@ -91,9 +91,11 @@ It persists:
 - latitude and longitude,
 - timezone,
 - schedule mode and absolute/sun-offset values,
+- motor timing configuration,
+
+and for saving across 
 - last genuine motor event metadata,
 - scheduler debounce trigger,
-- motor timing configuration.
 
 This is the durable source of truth for configuration and state across sleep cycles.
 
@@ -106,16 +108,22 @@ It is responsible for:
 - reading the RTC clock,
 - validating that the time is sane,
 - setting the next RTC alarm,
-- retaining the wake reason and requested action,
+- retaining config, in case of power loss,
 - clearing the alarm flag.
 
 The RTC always stores UTC. The firmware converts to local time only when showing the wall-clock value or accepting user input.
 
-### TimeZone and TimeZones
+### TimeTools
 
-The project stores timezone as a named IANA-style zone string, not as a raw UTC offset. Conversion logic lives in `TimeZone` and `TimeZones.h`.
-
-This lets the UI and schedule math stay correct across DST transitions without requiring the user to re-save a fresh UTC value every time the offset changes.
+It is responsible for converting, manipulating times.
+2 types of time representation:
+ - DateTime: a full timestamp, in a struct provided by RTC lib
+ - time of day: a number of minutes since 00:00 sored in integer
+Time operations availables:
+- convert UTC <-> Local
+- conpute the time of sunrise/sunset for a given day+position
+- convert DateTime <-> Time of day
+- convert Time (or Time of day) <-> hh:mm string
 
 ### Scheduler
 
@@ -123,11 +131,11 @@ This lets the UI and schedule math stay correct across DST transitions without r
 
 It is responsible for:
 
-- resolving schedule targets in UTC,
+- keep a list of scheduled actions
+- resolving schedule targets (in UTC),
 - comparing current time to those targets,
 - deciding whether a scheduled action is due,
 - choosing the next alarm to arm,
-- sleeping again after finishing the current cycle.
 
 Important design points:
 
@@ -143,12 +151,10 @@ This prevents a second poll or reboot from double-firing the same occurrence whi
 
 It is responsible for:
 
-- motor direction selection,
-- timed motor run,
-- motor shutdown,
-- updating the persisted last-operation record.
+- door actuation (timed motor run)
+- motor controler sleep,
 
-It has no scheduling logic and no �already there� check. It simply executes the command it was asked to perform.
+It has no scheduling logic and no "already there" check. It simply executes the command it was asked to perform.
 
 The separation is intentional:
 

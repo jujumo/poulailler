@@ -3,7 +3,7 @@
 #include <Wire.h>
 
 #include "Debug.h"
-#include "config.h"
+#include "build_config.h"
 
 namespace {
 RTC_DATA_ATTR AlarmOperateDoor retainedAlarmOperateDoor = AlarmOperateDoor::no_door_operation;

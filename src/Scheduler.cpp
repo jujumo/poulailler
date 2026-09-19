@@ -1,12 +1,11 @@
 #include "Scheduler.h"
 
-#include <Dusk2Dawn.h>
 #include <WiFi.h>
 #include <esp_sleep.h>
 
 #include "Debug.h"
-#include "config.h"  // must come before Arduino.h to override LED_BUILTIN
-#include "TimeZone.h"
+#include "build_config.h"  // must come before Arduino.h to override LED_BUILTIN
+
 
 namespace {
 
@@ -21,12 +20,6 @@ constexpr int kScheduledAlarmToleranceAfterSec = 120;
 // Safety net in case a DS3231 alarm is ever missed/misconfigured.
 constexpr uint64_t kFallbackSleepSeconds = 24ULL * 3600ULL;
 constexpr uint64_t kDebugSleepFallbackSeconds = 60ULL;
-
-int normalizeMinutes(int minutes) {
-    minutes %= 1440;
-    if (minutes < 0) minutes += 1440;
-    return minutes;
-}
 
 [[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool enableRtcWakeup) {
     WiFi.mode(WIFI_OFF);
@@ -49,55 +42,7 @@ int normalizeMinutes(int minutes) {
 
 namespace Scheduler {
 
-// Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
-// [0, 1440) for extreme timezone/longitude combinations - normalize here so
-// callers only ever see well-formed minute-of-day values.
-//
-// (year, month, day) is a UTC calendar date, and the result is UTC-native:
-// passing timezone=0/isDST=false makes Dusk2Dawn return its raw UTC minutes
-// (see Dusk2Dawn::sunriseSetUTC()) with no local/DST conversion at all -
-// sunrise/sunset is purely a function of lat/lon/date, so no timezone is
-// needed here once everything downstream works in UTC too.
-SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
-    Dusk2Dawn location(cfg.lat, cfg.lon, /*timezone=*/0.0f);
-    int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
-    int sunset = location.sunset(year, month, day, /*isDST=*/false);
 
-    SunTimes result;
-    result.valid = (sunrise != -1) && (sunset != -1);
-    if (result.valid) {
-        result.sunriseMinutes = normalizeMinutes(sunrise);
-        result.sunsetMinutes = normalizeMinutes(sunset);
-    }
-    return result;
-}
-
-// Fixed-time schedules are stored in UTC minute-of-day (the RTC stores UTC,
-// and all scheduling math compares against UTC) - local wall-clock values are
-// only used in the web UI and converted to UTC at save time.
-int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
-                       int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
-                       const char* zoneName) {
-    (void)utcDay;
-    (void)zoneName;
-    if (mode == ScheduleMode::SUN_OFFSET && sunValid) {
-        return normalizeMinutes(sunEventUtcMinutes + sunOffsetMinutes);
-    }
-    return normalizeMinutes(absMinutes);
-}
-
-// The one place "open or close?" is dispatched for schedule resolution -
-// decideDoorAction()/armNextAlarmAndSleep() below and WebPortal's display
-// code all go through this instead of duplicating the field picks.
-int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
-                            const DateTime& utcDay) {
-    ScheduleMode mode = isOpen ? cfg.openMode : cfg.closeMode;
-    uint16_t absMinutes = isOpen ? cfg.openAbsMinutes : cfg.closeAbsMinutes;
-    int16_t sunOffsetMinutes = isOpen ? cfg.openSunOffsetMinutes : cfg.closeSunOffsetMinutes;
-    int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
-    return resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes, sunEventUtcMinutes, sun.valid,
-                              utcDay, cfg.timezone);
-}
 
 bool scheduledAlarmInWindow(int64_t offsetSeconds) {
     return offsetSeconds >= 0 && offsetSeconds <= kScheduledAlarmToleranceAfterSec;
@@ -116,74 +61,7 @@ void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
     DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
     int nowSeconds = (now.hour() * 60 + now.minute()) * 60 + now.second();
 
-    SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
-    SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
-
-    int openTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunToday, now);
-    int closeTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/false, sunToday, now);
-    int openTomorrowMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunTomorrow, tomorrow);
-
-    // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
-    // at the *next* occurrence of the given time-of-day, so a "today" value
-    // that has already passed simply rolls over to tomorrow in hardware.
-    // That means a today's time-of-day already behind us can't be armed as
-    // "today" - doing so would make the DS3231 roll it to tomorrow and skip
-    // straight past a still-upcoming event later today (e.g. an 08:00 open
-    // already past and an 18:00 close still ahead: naively arming the
-    // earlier clock-time of the two, 08:00, would silently swallow today's
-    // close). This is independent of whether either has already fired -
-    // decideDoorAction() has no memory of that, and neither does this.
-    bool openUpcoming = nowSeconds <= openTodayMin * 60 + kToleranceAfterSec;
-    bool closeUpcoming = nowSeconds <= closeTodayMin * 60 + kToleranceAfterSec;
-
-    int nextMinute;
-    AlarmOperateDoor nextOperation;
-    DateTime nextEventDay;
-    if (openUpcoming && closeUpcoming) {
-        nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
-        nextOperation = (openTodayMin < closeTodayMin) ? AlarmOperateDoor::door_open
-                                                        : AlarmOperateDoor::door_close;
-        nextEventDay = now;
-    } else if (openUpcoming) {
-        nextMinute = openTodayMin;
-        nextOperation = AlarmOperateDoor::door_open;
-        nextEventDay = now;
-    } else if (closeUpcoming) {
-        nextMinute = closeTodayMin;
-        nextOperation = AlarmOperateDoor::door_close;
-        nextEventDay = now;
-    } else {
-        nextMinute = openTomorrowMin;
-        nextOperation = AlarmOperateDoor::door_open;
-        nextEventDay = tomorrow;
-    }
-
-    DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(),
-                           nextMinute / 60, nextMinute % 60, 0);
-
-    // Scheduled alarms carry the selected door operation and no WiFi startup;
-    // wake at the actual target and handle the action directly in setup().
-    DateTime wakeAt = nextEventUtc;
-
-#ifdef DEBUG_TRACES
-    // Runs on every boot right before going back to sleep, so this doubles
-    // as the "what does the device think right now, and when will it next
-    // wake up" boot trace.
-    TimeZone::LocalTime nowLocal = TimeZone::toLocal(now, cfg.timezone);
-    TimeZone::LocalTime nextEventLocal = TimeZone::toLocal(nextEventUtc, cfg.timezone);
-    TRACEF("[Scheduler] RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / %04d-%02d-%02d %02d:%02d:%02d local",
-           now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(),
-           nowLocal.dt.year(), nowLocal.dt.month(), nowLocal.dt.day(), nowLocal.dt.hour(),
-           nowLocal.dt.minute(), nowLocal.dt.second());
-    TRACEF("[Scheduler] next event: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 "
-           "local (openUpcoming=%d closeUpcoming=%d) | waking at %02d:%02d:%02d UTC",
-           nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), nextEventUtc.hour(),
-           nextEventUtc.minute(), nextEventLocal.dt.year(), nextEventLocal.dt.month(),
-           nextEventLocal.dt.day(), nextEventLocal.dt.hour(), nextEventLocal.dt.minute(),
-           openUpcoming, closeUpcoming, wakeAt.hour(), wakeAt.minute(), wakeAt.second());
-#endif
-
-    rtc.setNextAlarm(wakeAt, nextOperation, false);
+//    rtc.setNextAlarm(wakeAt, nextOperation, false);
     rtc.clearAlarm();
 
     goToSleep(kFallbackSleepSeconds, true);

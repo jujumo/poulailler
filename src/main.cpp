@@ -1,13 +1,13 @@
 #include <Arduino.h>
 #include <esp_sleep.h>
 
-#include "config.h"
+#include "build_config.h"
 #include "ConfigStore.h"
 #include "Debug.h"
 #include "DoorController.h"
 #include "RtcManager.h"
 #include "Scheduler.h"
-#include "TimeZone.h"
+#include "TimeTools.h"
 #include "WebPortal.h"
 
 namespace {
@@ -67,7 +67,7 @@ void setup() {
     while (!Serial && millis() - serialWaitStart < 2000UL) {
         delay(10);
     }
-    Serial.println("Hello from Poulailler!"); 
+    Serial.println("Bonjour from Poulailler!"); 
 
     // Blink blue LED to indicate the ESP32 is awake
     pinMode(PIN_STATUS_LED, OUTPUT);

@@ -1,0 +1,32 @@
+#pragma once
+#include "ConfigStore.h"
+#include <RTClib.h> //< for DateTime
+
+// Converts , manipulate times type.
+// 2 types of time representation:
+//  - DateTime: a full timestamp, in a struct provided by RTC lib
+//  - time of day: a number of minutes since 00:00 sored in integer
+// Time operations availables:
+// - convert UTC <-> Local
+// - conpute the time of sunrise/sunset for a given day+position
+// - convert DateTime <-> Time of day
+// - convert Time (or Time of day) <-> hh:mm string
+
+namespace TimeTools {
+
+// UTC <-> Local
+DateTime convert_utc_to_local(const DateTime& timestamp, const float utc_offset);
+DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset);
+int convert_timeofday_utc_to_local(int time_of_day_utc, const float utc_offset);
+int convert_timeofday_local_to_utc(int time_of_day_local, const float utc_offset);
+
+// compute sun events in utc
+DateTime compute_sunrise_for_today(const Config& cfg, const DateTime& now_utc);
+DateTime compute_sunset_for_today(const Config& cfg, const DateTime& now_utc);
+
+// string converions
+String convert_timeofday_to_string(int time_of_day);
+int convert_string_to_timeofday(const String& value);
+String convert_time_to_string(const DateTime& now);
+
+}  // namespace TimeZone

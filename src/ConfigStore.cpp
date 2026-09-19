@@ -2,9 +2,19 @@
 
 #include <Preferences.h>
 
-void ConfigStore::begin() {
+void ConfigStore::begin() 
+{
     // Nothing to do up front - Preferences is opened/closed per operation
     // so it never stays mounted across a deep sleep cycle.
+}
+
+void ConfigStore::clear() 
+{
+    Preferences prefs;
+    prefs.begin(NAMESPACE, /*readOnly=*/false);
+    prefs.clear();
+    prefs.end();
+
 }
 
 Config ConfigStore::load() {
@@ -14,7 +24,7 @@ Config ConfigStore::load() {
     prefs.begin(NAMESPACE, /*readOnly=*/true);
     cfg.lat = prefs.getFloat("lat", cfg.lat);
     cfg.lon = prefs.getFloat("lon", cfg.lon);
-    prefs.getString("timezone", cfg.timezone, sizeof(cfg.timezone));
+    cfg.utc_offset = prefs.getFloat("utc_offset", cfg.utc_offset);
 
     cfg.openMode = static_cast<ScheduleMode>(prefs.getUChar("openMode", static_cast<uint8_t>(cfg.openMode)));
     cfg.openAbsMinutes = prefs.getUShort("openAbsMin", cfg.openAbsMinutes);
@@ -24,10 +34,6 @@ Config ConfigStore::load() {
     cfg.closeAbsMinutes = prefs.getUShort("closeAbsMin", cfg.closeAbsMinutes);
     cfg.closeSunOffsetMinutes = static_cast<int16_t>(prefs.getShort("closeSunOff", cfg.closeSunOffsetMinutes));
 
-    cfg.lastOperationAction = static_cast<DoorAction>(
-        prefs.getUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction)));
-    cfg.lastOperationUnixTime = prefs.getULong("lastOpTime", cfg.lastOperationUnixTime);
-    cfg.lastTriggerUnixTime = prefs.getULong("lastTrigger", cfg.lastTriggerUnixTime);
     cfg.motorOpenDurationMs = prefs.getULong("motorOpenMs", cfg.motorOpenDurationMs);
     cfg.motorCloseDurationMs = prefs.getULong("motorCloseMs", cfg.motorCloseDurationMs);
     cfg.motorInvertDirection = prefs.getBool("motorInvertDir", cfg.motorInvertDirection);
@@ -44,7 +50,7 @@ void ConfigStore::save(const Config& cfg) {
 
     prefs.putFloat("lat", cfg.lat);
     prefs.putFloat("lon", cfg.lon);
-    prefs.putString("timezone", cfg.timezone);
+    prefs.putFloat("utc_offset", cfg.utc_offset);
 
     prefs.putUChar("openMode", static_cast<uint8_t>(cfg.openMode));
     prefs.putUShort("openAbsMin", cfg.openAbsMinutes);
@@ -54,9 +60,6 @@ void ConfigStore::save(const Config& cfg) {
     prefs.putUShort("closeAbsMin", cfg.closeAbsMinutes);
     prefs.putShort("closeSunOff", cfg.closeSunOffsetMinutes);
 
-    prefs.putUChar("lastOpAction", static_cast<uint8_t>(cfg.lastOperationAction));
-    prefs.putULong("lastOpTime", cfg.lastOperationUnixTime);
-    prefs.putULong("lastTrigger", cfg.lastTriggerUnixTime);
     prefs.putULong("motorOpenMs", cfg.motorOpenDurationMs);
     prefs.putULong("motorCloseMs", cfg.motorCloseDurationMs);
     prefs.putBool("motorInvertDir", cfg.motorInvertDirection);

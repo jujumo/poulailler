@@ -43,27 +43,27 @@ button{padding:.6em 1em;margin-top:.5em}
 <fieldset><legend>Current RTC time</legend>
 {{NOW_SUFFIX}}
 <p>Local time: <strong>{{LOCAL_TIME}}</strong></p>
-<label>Timezone<select name='timezone'>{{TIMEZONE_OPTIONS}}</select></label>
+<label>UTC offest<input type='number'  step='1' name='utc_offset' value='{{UTC_OFFSET}}'></label>
 <p>UTC time: {{UTC_TIME}}</p>
 </fieldset>
 <fieldset><legend>Sun ephemeris</legend>
 <label>Latitude (-90..90)<input type='number' step='0.0001' name='lat' value='{{LAT}}'></label>
 <label>Longitude (-180..180)<input type='number' step='0.0001' name='lon' value='{{LON}}'></label>
-<p>Next sunrise: <span id='sunriseLocal'>{{SUNRISE}}</span> (<span id='sunriseUtc'>{{SUNRISE_UTC}}</span> UTC)</p>
-<p>Next sunset: <span id='sunsetLocal'>{{SUNSET}}</span> (<span id='sunsetUtc'>{{SUNSET_UTC}}</span> UTC)</p>
+<p>Next sunrise: <span id='sunriseLocal'>{{SUNRISE_LOCAL}}</span> (<span id='sunriseUtc'>{{SUNRISE_UTC}}</span> UTC)</p>
+<p>Next sunset: <span id='sunsetLocal'>{{SUNSET_LOCAL}}</span> (<span id='sunsetUtc'>{{SUNSET_UTC}}</span> UTC)</p>
 </fieldset>
 <fieldset><legend>Door opens</legend>
 <p>The door is currently set to open at {{OPEN_LOCAL}} ({{OPEN_UTC}} UTC). Changes made here take effect only after you save settings.</p>
 <label><input type='radio' name='openMode' value='absolute'{{OPEN_ABS_CHECKED}}> At a fixed time</label>
-<input type='time' name='openAbs' value='{{OPEN_ABS}}'>
+<input type='time' name='openAbsLocal' value='{{OPEN_ABS_LOCAL}}'>
 <label><input type='radio' name='openMode' value='sun'{{OPEN_SUN_CHECKED}}> Relative to sunrise (minutes offset, +/-)</label>
-<input type='number' min='-720' max='720' step='1' name='openSunOff' value='{{OPEN_SUN_OFF}}'>
+<input type='number' min='-720' max='720' step='1' name='openSunOff' value='{{OPEN_SUN_OFFSET}}'>
 <p id='openPreview' class='preview'></p>
 </fieldset>
 <fieldset><legend>Door closes</legend>
 <p>The door is currently set to close at {{CLOSE_LOCAL}} ({{CLOSE_UTC}} UTC). Changes made here take effect only after you save settings.</p>
 <label><input type='radio' name='closeMode' value='absolute'{{CLOSE_ABS_CHECKED}}> At a fixed time</label>
-<input type='time' name='closeAbs' value='{{CLOSE_ABS}}'>
+<input type='time' name='closeAbsLocal' value='{{CLOSE_ABS_LOCAL}}'>
 <label><input type='radio' name='closeMode' value='sun'{{CLOSE_SUN_CHECKED}}> Relative to sunset (minutes offset, +/-)</label>
 <input type='number' min='-720' max='720' step='1' name='closeSunOff' value='{{CLOSE_SUN_OFF}}'>
 <p id='closePreview' class='preview'></p>
