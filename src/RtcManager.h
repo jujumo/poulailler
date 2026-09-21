@@ -3,7 +3,6 @@
 #include <RTClib.h>
 
 #include "Config.h"
-#include "TimeTools.h"
 
 
 // Thin wrapper around RTClib's RTC_DS3231.

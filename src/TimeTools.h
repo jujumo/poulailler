@@ -20,11 +20,8 @@ DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset)
 
 // DateTime <-> timeofday
 int convert_time_to_timeofday(const DateTime& timestamp);
-DateTime convert_timeofday_to_time(int timeofday);
+DateTime convert_timeofday_to_time(int timeofday, const DateTime& now);
 
-//
-int convert_timeofday_utc_to_local(int time_of_day_utc, const float utc_offset);
-int convert_timeofday_local_to_utc(int time_of_day_local, const float utc_offset);
 
 // compute sun events in utc
 DateTime compute_sunrise_for_today(const float latitude, const float longitude, const DateTime& now_utc);

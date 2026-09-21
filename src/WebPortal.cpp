@@ -273,9 +273,13 @@ String WebPortal::buildIndexHtml()
     );
 
     const int open_timeofday_local =
-        convert_timeofday_utc_to_local(
-            config_.open_timeofday,
-            config_.utc_offset
+		convert_time_to_timeofday
+		(
+			convert_utc_to_local
+			(
+				convert_timeofday_to_time(config_.open_timeofday, now_utc),
+				config_.utc_offset
+			)
         );
 
     html.replace(
@@ -311,9 +315,13 @@ String WebPortal::buildIndexHtml()
     );
 
     const int close_timeofday_local =
-        convert_timeofday_utc_to_local(
-            config_.close_timeofday,
-            config_.utc_offset
+		convert_time_to_timeofday
+		(
+			convert_utc_to_local
+			(
+				convert_timeofday_to_time(config_.close_timeofday, now_utc),
+				config_.utc_offset
+			)
         );
 
     html.replace(
@@ -412,6 +420,7 @@ void WebPortal::handleSaveConfig()
 {
     Config next = config_;
     bool ok = true;
+	    const DateTime now_utc = rtc_.now();
 
 #ifdef DEBUG_TRACES
     TRACEF(
@@ -472,16 +481,19 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("open_timeofday_local")) {
-        const int local_timeofday =
-            convert_string_to_timeofday(
+        const int open_timeofday_local = convert_string_to_timeofday(
                 server_.arg("open_timeofday_local")
             );
 
-        if (valid_timeofday(local_timeofday)) {
+        if (valid_timeofday(open_timeofday_local)) {
             next.open_timeofday =
-                convert_timeofday_local_to_utc(
-                    local_timeofday,
-                    next.utc_offset
+                convert_time_to_timeofday
+				(
+					convert_local_to_utc
+					(
+						convert_timeofday_to_time(open_timeofday_local, now_utc),
+						next.utc_offset
+					)
                 );
         } else {
             ok = false;
@@ -508,16 +520,20 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("close_timeofday_local")) {
-        const int local_timeofday =
+        const int close_timeofday_local =
             convert_string_to_timeofday(
                 server_.arg("close_timeofday_local")
             );
 
-        if (valid_timeofday(local_timeofday)) {
+        if (valid_timeofday(close_timeofday_local)) {
             next.close_timeofday =
-                convert_timeofday_local_to_utc(
-                    local_timeofday,
-                    next.utc_offset
+                convert_time_to_timeofday
+				(
+					convert_local_to_utc
+					(
+						convert_timeofday_to_time(close_timeofday_local, now_utc),
+						next.utc_offset
+					)
                 );
         } else {
             ok = false;

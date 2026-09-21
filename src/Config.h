@@ -48,7 +48,7 @@ struct Config {
     float latitude   = DEFAULT_LATITUE;
     float longitude  = DEFAULT_LONGITUDE;
     float utc_offset = DEFAULT_UTC_OFFSET;
-
+	
     ScheduleMode open_mode = ScheduleMode::TIME_OF_DAY;
     uint16_t open_timeofday = 540;   // UTC time-of-day (540 = 9h = 7h local)
     int16_t open_sun_offset = 0;  // relative to sunrise

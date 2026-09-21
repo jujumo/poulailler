@@ -2,7 +2,6 @@
 
 #include <Preferences.h>
 
-
 namespace ConfigStore {
 
 
@@ -15,7 +14,6 @@ void clear()
     prefs.begin(NAMESPACE, /*readOnly=*/false);
     prefs.clear();
     prefs.end();
-
 }
 
 

@@ -26,24 +26,17 @@ DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset)
 }
 
 
-// transform a time of day (in minutes) from UTC to Local 
-int convert_timeofday_utc_to_local(
-    int time_of_day_utc, 
-    const float utc_offset) 
+// DateTime <-> timeofday
+int convert_time_to_timeofday(const DateTime& timestamp)
 {
-	// TODO: handle cross day
-    return time_of_day_utc + 60 * utc_offset;
+    return timestamp.hour() * 60 + timestamp.minute();
 }
 
-// transform a time of day (in minutes) from local to UTC
-int convert_timeofday_local_to_utc(
-    int time_of_day_local, 
-    const float utc_offset) 
+DateTime convert_timeofday_to_time(int timeofday, const DateTime& now)
 {
-	// TODO: handle cross day
-    return time_of_day_local - 60 * utc_offset;
+    return DateTime(now.year(), now.month(), now.day(),
+        timeofday / 60, timeofday % 60, 0);
 }
-
 
 // Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
 // [0, 1440) for extreme timezone/longitude combinations - normalize here so
