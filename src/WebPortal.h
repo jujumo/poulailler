@@ -4,7 +4,7 @@
 #include <WebServer.h>
 #include <WiFiServer.h>
 
-#include "ConfigStore.h"
+#include "Config.h"
 #include "RtcManager.h"
 
 enum class WebPortalRequest : uint8_t {
@@ -20,7 +20,7 @@ enum class WebPortalRequest : uint8_t {
 // the portal is torn down.
 class WebPortal {
 public:
-    WebPortal(ConfigStore& store, RtcManager& rtc);
+    WebPortal(Config& config, RtcManager& rtc);
 
     // Starts the AP, serves the page for durationMs, then tears the AP down
     // and returns the requested action. The caller owns all sleep and door
@@ -41,12 +41,11 @@ private:
 
     String buildIndexHtml();
 
-    ConfigStore& store_;
+    Config& config_;
     RtcManager& rtc_;
     WebServer server_;
     DNSServer dnsServer_;
     WiFiServer httpsStub_;
-    Config cfg_;
     String statusMessage_;
     WebPortalRequest request_ = WebPortalRequest::NONE;
     bool stopRequested_ = false;

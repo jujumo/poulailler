@@ -3,9 +3,10 @@
 #include <Arduino.h>
 
 #include "Debug.h"
-#include "build_config.h"
 
-DoorController::DoorController(ConfigStore& store, RtcManager& rtc) : store_(store), rtc_(rtc) {}
+
+DoorController::DoorController(Config& config, RtcManager& rtc) : config_(config), rtc_(rtc) 
+{}
 
 void DoorController::begin() {
     pinMode(PIN_MOTOR_IN1, OUTPUT);
@@ -33,18 +34,22 @@ void DoorController::jitter() {
     digitalWrite(PIN_MOTOR_SLEEP, LOW);
 }
 
-void DoorController::open(Config& cfg) {
-    const Direction direction = cfg.motorInvertDirection ? Direction::CLOSE : Direction::OPEN;
+void DoorController::open() {
+    const Direction direction = config_.motor_invert_direction 
+                              ? Direction::CLOSE
+                              : Direction::OPEN;
     TRACE("[Door] opening");
-    operateDoor(cfg.motorOpenDurationMs, direction);
+    operateDoor(config_.motor_open_duration_ms, direction);
 
     TRACE("[Door] opened");
 }
 
-void DoorController::close(Config& cfg) {
-    const Direction direction = cfg.motorInvertDirection ? Direction::OPEN : Direction::CLOSE;
+void DoorController::close() {
+   const Direction direction = config_.motor_invert_direction 
+                              ? Direction::CLOSE
+                              : Direction::OPEN;
     TRACE("[Door] closing");
-    operateDoor(cfg.motorCloseDurationMs, direction);
+    operateDoor(config_.motor_close_duration_ms, direction);
 
     TRACE("[Door] closed");
 }

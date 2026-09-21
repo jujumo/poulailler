@@ -1,14 +1,16 @@
 # Poulailler architecture
 
-This firmware is a low-power ESP32-C6 controller for a chicken-coop door. It is intentionally not a continuously running application. It sleeps most of the time, wakes on a scheduled alarm or a service wake, performs one bounded task, and then goes back to deep sleep.
+This firmware is a low-power ESP32-C6 controller for a chicken-coop door. 
+It is intentionally not a continuously running application. 
+It sleeps most of the time, wakes on a scheduled alarm or a service wake, 
+performs one task, and then goes back to deep sleep.
 
 The design priorities are:
 
-- never move the door before the requested time;
-- never run a door action during a WiFi service session;
-- keep all persistent state in NVS or the RTC, not in RAM;
-- always clear the DS3231 alarm before continuing and before sleeping again.
-
+- low energy consumption (put everything to sleep),
+- simple design, easy to test (1 action per awakening),
+- resilient to power loss (save minimal config in NVC memory)
+ 
 ## 1. Execution model
 
 ### Deep-sleep wake flow
@@ -20,20 +22,20 @@ On every boot or wake:
 1. `setup()` starts fresh.
 2. It loads configuration from `ConfigStore`.
 3. It initializes the RTC wrapper.
-4. It checks the wake cause and the retained alarm payload.
+4. It checks the wake cause
 5. It then does exactly one of the following:
    - execute a pending `door_open` / `door_close` action,
    - serve the WiFi web portal,
    - or arm the next scheduled event and sleep again.
 6. `loop()` is empty.
 
-The project depends on this model: RAM is not a durable state container across sleep cycles.
-
 ### Why the loop is empty
 
-The ESP32 goes to deep sleep between work windows. A wake is simply a fresh boot with a different reason. Anything that matters between cycles must be stored either in:
+The ESP32 goes to deep sleep between work windows. 
+A wake is simply a fresh boot with a different reason. 
+Anything that matters between cycles must be stored either in:
 
-- the ESP32 NVS (`ConfigStore`), or
+- the ESP32 NVS (`Config`) that will survive power loss, or
 - the DS3231 RTC and its retained alarm metadata (`RtcManager`).
 
 That is why all decisions are re-derived on each wake instead of carried forward through a long-lived loop.
@@ -82,20 +84,16 @@ If either clear is skipped, the open-drain alarm line can remain asserted and th
 
 ## 3. Modules and responsibilities
 
-### ConfigStore
+### Config
 
-`ConfigStore` is the persistence layer. It wraps the ESP32 NVS namespace `doorcfg` and owns the `Config` structure.
+`Config` is the persistence layer. It wraps the ESP32 NVS namespace `doorcfg` and owns the `Config` structure.
 
 It persists:
 
 - latitude and longitude,
-- timezone,
+- timezone (utc offset),
 - schedule mode and absolute/sun-offset values,
 - motor timing configuration,
-
-and for saving across 
-- last genuine motor event metadata,
-- scheduler debounce trigger,
 
 This is the durable source of truth for configuration and state across sleep cycles.
 
@@ -108,14 +106,13 @@ It is responsible for:
 - reading the RTC clock,
 - validating that the time is sane,
 - setting the next RTC alarm,
-- retaining config, in case of power loss,
 - clearing the alarm flag.
 
 The RTC always stores UTC. The firmware converts to local time only when showing the wall-clock value or accepting user input.
 
 ### TimeTools
 
-It is responsible for converting, manipulating times.
+`TimeTools` is responsible for converting, manipulating times.
 2 types of time representation:
  - DateTime: a full timestamp, in a struct provided by RTC lib
  - time of day: a number of minutes since 00:00 sored in integer
@@ -131,19 +128,45 @@ Time operations availables:
 
 It is responsible for:
 
-- keep a list of scheduled actions
-- resolving schedule targets (in UTC),
+- keep a sorted list of scheduled actions,
+- update schedule targets (in UTC),
 - comparing current time to those targets,
 - deciding whether a scheduled action is due,
-- choosing the next alarm to arm,
+- choosing the next alarm to arm.
 
 Important design points:
 
-- open and close schedules are resolved through a single dispatch function instead of duplicated logic;
-- a debounce saves the exact trigger minute in `Config::lastTriggerUnixTime`;
-- the debounce is narrower than a �done today� flag: it only suppresses the same scheduled trigger, not the entire day.
+An action is : 
+ - a full timestamp. But for "right away" events this tiemstamps can take abnormal values 1, 2, 3...
+ - a type of action: web service or door action
+ - if its a door action > payload: 
+   - open or close
+   - debug 
 
-This prevents a second poll or reboot from double-firing the same occurrence while still allowing the next real schedule occurrence to trigger normally.
+The list of scheduled actions is sorted by timestamps, in chronological order.
+Meaning, the first action, is the next in line.
+
+When execute due action is called, the Scheduler is lookging for the first action in line,
+and check is time to execute. If current time stamps is past the action timestamp, it is time 
+to execute, and remove the action from the list. If all actions are in the future, do nothing.
+
+Debounce is naturally handled, because action is poped out of the list. The real catch, is to make 
+sure past actions are not pushed again in the list. This should be taken care of during update.
+
+**Update** take care of populating scheduler action list with door actions. It should do so following 2 rules:
+- make sure there are always at least 2 door actions in line 
+- never add a schedule door action *before* one already existing. Its the debounce mecanisme.
+
+**Forced door actions** will add 2 actions in the list : 
+ - timestamp 1 : door action
+ - timestamp 2 : wifi service
+
+**Arm alarm and go to sleep** take the first action in line, and look at the timestamp.
+There are 2 cases :
+ - if action is already passed (eg. right away door action) then set alarm in 2 seconds
+ - if action is in the future then set alarm at this time
+and go to sleep.
+ 
 
 ### DoorController
 
@@ -170,24 +193,20 @@ It serves the local web page and supports:
 - viewing the schedule,
 - editing settings,
 - syncing the RTC from the browser,
-- force-open / force-close requests,
-- immediate sleep for tests,
 - a lightweight ping endpoint used by the UI heartbeat.
+  
+and debug functions:
+- force-open / force-close requests,
+- immediate sleep,
 
-It does not trigger the motor directly during the active portal session. Instead, it requests a later wake for the door action. That cleanly separates configuration handling from actuation.
+For debuging the actual workflow, it does not trigger the motor 
+directly during the active portal session. 
+Instead, it pushed a request for a later wake for the door action. 
+That cleanly separates configuration handling from actuation.
 
 ## 4. Data flow
 
 The persistent data model is intentionally small and explicit.
-
-### Last operation vs trigger
-
-There are two distinct fields with different meaning:
-
-- `lastOperationAction` and `lastOperationUnixTime`: the real motor event, recorded after movement happens;
-- `lastTriggerUnixTime`: the schedule debounce key, used to prevent duplicate execution of the same target.
-
-They are related but not interchangeable. The first is historical evidence; the second is a scheduling safety gate.
 
 ## 5. Wake sequencing
 

@@ -57,9 +57,12 @@ int convert_timeofday_local_to_utc(
 
 
 // compute sun events in utc
-DateTime compute_sunrise_for_today(const Config& cfg, const DateTime& now_utc)
+DateTime compute_sunrise_for_today(
+    const float latitude, 
+    const float longitude,
+    const DateTime& now_utc)
 {
-    Dusk2Dawn location(cfg.lat, cfg.lon, /*timezone=*/0.0f);
+    Dusk2Dawn location(latitude, longitude, /*timezone=*/0.0f);
     const int year = now_utc.year();
     const int month = now_utc.month();
     const int day = now_utc.day();
@@ -70,9 +73,12 @@ DateTime compute_sunrise_for_today(const Config& cfg, const DateTime& now_utc)
     return sunevt_ts;
 }
 
-DateTime compute_sunset_for_today(const Config& cfg, const DateTime& now_utc)
+DateTime compute_sunset_for_today(
+    const float latitude, 
+    const float longitude,
+    const DateTime& now_utc)
 {
-    Dusk2Dawn location(cfg.lat, cfg.lon, /*timezone=*/0.0f);
+    Dusk2Dawn location(latitude, longitude, /*timezone=*/0.0f);
     const int year = now_utc.year();
     const int month = now_utc.month();
     const int day = now_utc.day();
@@ -106,7 +112,7 @@ int convert_string_to_timeofday(const String& value)
 String convert_time_to_string(const DateTime& now)
 {
     char buf[50];
-    snprintf(buf, sizeof(buf), "%04/%02/%02-%02d:%02d", 
+    snprintf(buf, sizeof(buf), "%04d/%02d/%02d-%02d:%02d", 
              now.year(), now.month(), now.day(),
              now.hour(), now.minute()
         );

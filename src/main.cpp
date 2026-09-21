@@ -1,8 +1,7 @@
 #include <Arduino.h>
 #include <esp_sleep.h>
 
-#include "build_config.h"
-#include "ConfigStore.h"
+#include "Config.h"
 #include "Debug.h"
 #include "DoorController.h"
 #include "RtcManager.h"
@@ -11,41 +10,42 @@
 #include "WebPortal.h"
 
 namespace {
+
 constexpr unsigned long kConfigPortalDurationMs = 5UL * 60UL * 1000UL;
+constexpr uint64_t kRtcWakeMask = (1ULL << PIN_RTC_SWQ);
 
 #ifdef DEBUG_TRACES
-// UNDEFINED here means a *real* reset (power-on, manual reset, or a
-// brownout) rather than a clean deep-sleep wake - worth naming explicitly
-// since a brownout mid-move (the motor's current draw sagging the supply)
-// reroutes this boot into the 5-minute config portal instead of resuming
-// the schedule, and cfg.lastOperationAction won't have advanced past
-// whatever completed before the interrupted move.
-const char* wakeCauseName(esp_sleep_wakeup_cause_t cause) {
+
+const char* wakeCauseName(esp_sleep_wakeup_cause_t cause)
+{
     switch (cause) {
         case ESP_SLEEP_WAKEUP_UNDEFINED:
             return "UNDEFINED (power-on/reset/brownout)";
         case ESP_SLEEP_WAKEUP_EXT1:
             return "EXT1 (RTC alarm)";
         case ESP_SLEEP_WAKEUP_TIMER:
-            return "TIMER (fallback safety net)";
+            return "TIMER";
         default:
             return "OTHER";
     }
 }
 
-const char* alarmOperateDoorName(AlarmOperateDoor operation) {
-    switch (operation) {
-        case AlarmOperateDoor::door_open:
-            return "door_open";
-        case AlarmOperateDoor::door_close:
-            return "door_close";
-        case AlarmOperateDoor::no_door_operation:
+const char* actionTypeName(Scheduler::ActionType type)
+{
+    switch (type) {
+        case Scheduler::ActionType::DoorOpen:
+            return "DoorOpen";
+        case Scheduler::ActionType::DoorClose:
+            return "DoorClose";
+        case Scheduler::ActionType::WifiService:
+            return "WifiService";
         default:
-            return "no_door_operation";
+            return "UNKNOWN";
     }
 }
 
-const char* doorActionName(DoorAction action) {
+const char* doorActionName(DoorAction action)
+{
     switch (action) {
         case DoorAction::OPENED:
             return "OPENED";
@@ -55,135 +55,365 @@ const char* doorActionName(DoorAction action) {
             return "NONE";
     }
 }
-#endif
+
+void traceScheduler(const Scheduler& scheduler)
+{
+    TRACEF("[Scheduler] %u action(s)",
+           static_cast<unsigned>(scheduler.count()));
+
+    const Scheduler::Action* action = scheduler.nextAction();
+    if (action != nullptr) {
+        TRACEF("[Scheduler] next=%s @ %lu",
+               actionTypeName(action->type),
+               static_cast<unsigned long>(
+                   action->timestamp.unixtime()));
+    }
 }
 
-// Deep-sleep wake re-enters setup() from scratch, not loop() - all state
-// lives in NVS (ConfigStore) and the DS3231 (RtcManager), nothing survives
-// in RAM between cycles, so loop() is unused.
-void setup() {
+#endif
+
+// Schedule a wake from the DS3231 alarm pin.
+[[noreturn]] void sleepUntil(
+    RtcManager& rtc,
+    const DateTime& alarmTime)
+{
+    // The DS3231 alarm is programmed before entering deep sleep.
+    rtc.setNextAlarm(alarmTime);
+
+    // Make absolutely sure the ESP32 wakes from the DS3231 alarm pin.
+    esp_sleep_enable_ext1_wakeup(
+        kRtcWakeMask,
+        ESP_EXT1_WAKEUP_ANY_LOW
+    );
+
+    // Correctness rule: clear the alarm immediately before sleeping.
+    rtc.clearAlarm();
+
+    TRACE("[Sleep] entering deep sleep");
+    digitalWrite(PIN_STATUS_LED, LOW);
+    esp_deep_sleep_start();
+    // esp_deep_sleep_start() never returns.
+    while (true) {
+    }
+}
+
+[[noreturn]] void sleepForScheduler(
+    Scheduler& scheduler,
+    RtcManager& rtc)
+{
+    const Scheduler::Action* next = scheduler.nextAction();
+
+    if (next == nullptr) {
+        TRACE("[Sleep] no scheduled action; sleeping indefinitely");
+        rtc.clearAlarm();
+        digitalWrite(PIN_STATUS_LED, LOW);
+        esp_deep_sleep_start();
+        while (true) {
+        }
+    }
+
+    DateTime now = rtc.now();
+    DateTime alarmTime = next->timestamp;
+
+    /*
+     * RTC Alarm1 is time-of-day only. If the action is already due,
+     * wake again shortly rather than programming an alarm for a
+     * potentially incorrect occurrence.
+     */
+    if (alarmTime.unixtime() <= now.unixtime()) {
+        alarmTime = now + TimeSpan(0, 0, 0, 2);
+        TRACE("[Sleep] next action already due; retrying in 2 seconds");
+    }
+
+#ifdef DEBUG_TRACES
+    TRACEF("[Sleep] next=%s @ %lu",
+           actionTypeName(next->type),
+           static_cast<unsigned long>(
+               next->timestamp.unixtime()));
+
+    TRACEF("[Sleep] alarm @ %04d-%02d-%02d %02d:%02d:%02d",
+           alarmTime.year(),
+           alarmTime.month(),
+           alarmTime.day(),
+           alarmTime.hour(),
+           alarmTime.minute(),
+           alarmTime.second());
+#endif
+
+    sleepUntil(rtc, alarmTime);
+}
+
+} // namespace
+
+
+void setup()
+{
     Serial.begin(115200);
-    unsigned long serialWaitStart = millis();
+    const unsigned long serialWaitStart = millis();
     while (!Serial && millis() - serialWaitStart < 2000UL) {
         delay(10);
     }
-    Serial.println("Bonjour from Poulailler!"); 
 
-    // Blink blue LED to indicate the ESP32 is awake
+    Serial.println("Bonjour from Poulailler!");
     pinMode(PIN_STATUS_LED, OUTPUT);
     digitalWrite(PIN_STATUS_LED, HIGH);
 
-    ConfigStore store;
-    store.begin();
-    Config cfg = store.load();
+    //Configuration
+    Config config = ConfigStore::load();
 
+    // RTC
     RtcManager rtc;
-    rtc.begin();
-
-    DoorController door(store, rtc);
-    door.begin();
-
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    AlarmOperateDoor operation = rtc.alarmOperateDoor();
-    bool wifiRequested = rtc.alarmWifiUp();
-    bool doorActionRequested = cause == ESP_SLEEP_WAKEUP_EXT1 &&
-                               operation != AlarmOperateDoor::no_door_operation;
-
-#ifdef DEBUG_TRACES
-    // Printed immediately at boot, before the (potentially 5-minute-long)
-    // config portal - so "what time does the device think it is" is visible
-    // right away rather than only after armNextAlarmAndSleep() at the very
-    // end of this same boot cycle.
-    if (rtc.isTimeValid()) {
-        DateTime utcNow = rtc.now();
-        TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, cfg.timezone);
-       TRACEF("[Boot] wake cause=%s operate=%s wifiUp=%d lastEvent=%s@%lu RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / "
-               "%04d-%02d-%02d %02d:%02d:%02d local",
-            wakeCauseName(cause), alarmOperateDoorName(operation), wifiRequested,
-            doorActionName(cfg.lastOperationAction),
-               static_cast<unsigned long>(cfg.lastOperationUnixTime), utcNow.year(), utcNow.month(),
-               utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second(), localNow.dt.year(),
-               localNow.dt.month(), localNow.dt.day(), localNow.dt.hour(), localNow.dt.minute(),
-               localNow.dt.second());
-    } else {
-         TRACEF("[Boot] wake cause=%s operate=%s wifiUp=%d lastEvent=%s@%lu, RTC time not valid (never set / lost power)",
-            wakeCauseName(cause), alarmOperateDoorName(operation), wifiRequested,
-             doorActionName(cfg.lastOperationAction),
-               static_cast<unsigned long>(cfg.lastOperationUnixTime));
+    if (!rtc.begin()) {
+        TRACE("[Boot] RTC initialization failed");
+        digitalWrite(PIN_STATUS_LED, LOW);
+        while (true) {
+            delay(1000);
+        }
     }
-#endif
 
-    // Clear the alarm-fired flag right away regardless of wake cause - see
-    // the correctness rule in ARCHITECRTURE.md; must happen again immediately
-    // before every esp_deep_sleep_start() too (see Scheduler).
+    // The alarm must be cleared immediately after every wake.
     rtc.clearAlarm();
 
-    if (doorActionRequested) {
-        TRACE("[Boot] door-operation wake: operating without WiFi");
-        if (wifiRequested) {
-            if (operation == AlarmOperateDoor::door_open) {
-                door.open(cfg);
-            } else {
-                door.close(cfg);
-            }
-        } else if (rtc.isTimeValid()) {
-            DateTime now = rtc.now();
-            int64_t offsetSeconds = static_cast<int64_t>(now.unixtime()) -
-                                    static_cast<int64_t>(rtc.alarmRequestUnixTime());
-            bool scheduledAlarmInWindow = Scheduler::scheduledAlarmInWindow(offsetSeconds);
-            TRACEF("[Boot] scheduled alarm actual=%lu requested=%lu offset=%llds allowed=%d",
-                   static_cast<unsigned long>(now.unixtime()),
-                   static_cast<unsigned long>(rtc.alarmRequestUnixTime()),
-                   static_cast<long long>(offsetSeconds), scheduledAlarmInWindow);
-            if (scheduledAlarmInWindow) {
-                if (operation == AlarmOperateDoor::door_open) {
-                    door.open(cfg);
-                } else {
-                    door.close(cfg);
-                }
-            } else {
-                TRACE("[Boot] scheduled alarm outside 0..+2 minute window; skipping action");
-            }
-        } else {
-            TRACE("[Boot] scheduled alarm has invalid RTC time; skipping action");
-        }
-        // A debug action requests a separate WiFi session. A scheduled action
-        // consumes any WiFi request and goes directly to the next schedule.
-        if (!wifiRequested) {
-            TRACE("[Boot] scheduled door action complete: WiFi request consumed");
-        }
+    // Scheduler
+    Scheduler scheduler;
+    if (!scheduler.load()) {
+        TRACE("[Boot] scheduler load failed");
+    }
+
+    // Door controller
+    DoorController door(config, rtc);
+    door.begin();
+
+    // Wake cause
+    const esp_sleep_wakeup_cause_t wakeCause =
+        esp_sleep_get_wakeup_cause();
+
+#ifdef DEBUG_TRACES
+
+    TRACEF(
+        "[Boot] wake cause=%s",
+        wakeCauseName(wakeCause)
+    );
+
+    if (rtc.isTimeValid()) {
+        const DateTime now = rtc.now();
+        TRACEF(
+            "[Boot] RTC=%04d-%02d-%02d %02d:%02d:%02d UTC",
+            now.year(),
+            now.month(),
+            now.day(),
+            now.hour(),
+            now.minute(),
+            now.second()
+        );
+
+        TRACEF(
+            "[Boot] last operation=%s @ %lu",
+            doorActionName(cfg.lastOperationAction),
+            static_cast<unsigned long>(
+                cfg.lastOperationUnixTime)
+        );
     } else {
-        // No door action means this is a service session. This also handles
-        // reset and fallback-timer wakes; a timer must never execute a
-        // retained door operation early.
-        wifiRequested = true;
-        door.jitter();
-        TRACE("[Boot] WiFi wake: starting portal");
-        WebPortal portal(store, rtc);
-        WebPortalRequest webRequest;
-        do {
-            webRequest = portal.run(kConfigPortalDurationMs);
-        } while (!rtc.isTimeValid());
-        cfg = store.load();  // portal may have changed it
-        wifiRequested = false;  // the WiFi session has been consumed
+        TRACE("[Boot] RTC time is invalid");
+    }
 
-        if (webRequest == WebPortalRequest::FORCE_OPEN ||
-            webRequest == WebPortalRequest::FORCE_CLOSE ||
-            webRequest == WebPortalRequest::NAP) {
-            operation = webRequest == WebPortalRequest::FORCE_CLOSE
-                            ? AlarmOperateDoor::door_close
-                            : AlarmOperateDoor::door_open;
-            wifiRequested = true;  // debug action keeps WiFi for the next session
-            Scheduler::sleepForDoorAction(rtc, 2, operation, true);
+    traceScheduler(scheduler);
+
+#endif
+
+    /*
+     * ------------------------------------------------------------------
+     * Power-on / reset
+     * ------------------------------------------------------------------
+     *
+     * A real reset starts a bounded WiFi configuration session.
+     * A deep-sleep wake must never enter this branch.
+     */
+
+    if (wakeCause == ESP_SLEEP_WAKEUP_UNDEFINED) {
+        TRACE("[Boot] reset/power-on: starting WiFi portal");
+        door.jitter();
+        WebPortal portal(config, rtc);
+        const WebPortalRequest request =
+            portal.run(kConfigPortalDurationMs);
+
+        // The portal may have changed configuration.
+        config = ConfigStore::load();
+
+        /*
+         * A force operation is deliberately converted into
+         * two scheduler actions:
+         *
+         *   1. immediate door operation
+         *   2. WiFi service on the following wake
+         *
+         * Only one action is consumed per boot.
+         */
+        if (request == WebPortalRequest::FORCE_OPEN ||
+            request == WebPortalRequest::FORCE_CLOSE)
+        {
+            Scheduler::Action doorAction;
+            doorAction.timestamp = DateTime(1);
+            doorAction.type =
+                request == WebPortalRequest::FORCE_OPEN
+                    ? Scheduler::ActionType::DoorOpen
+                    : Scheduler::ActionType::DoorClose;
+
+            scheduler.addAction(doorAction);
+            Scheduler::Action wifiAction;
+            wifiAction.timestamp = DateTime(2);
+            wifiAction.type =
+                Scheduler::ActionType::WifiService;
+            scheduler.addAction(wifiAction);
+            TRACE("[Boot] forced door action queued");
+        }
+
+        /*
+         * NAP is intentionally represented only by a WiFi service
+         * request at this level. The portal has already completed its
+         * current service session.
+         */
+        else if (request == WebPortalRequest::NAP) 
+        {
+            Scheduler::Action wifiAction;
+            wifiAction.timestamp = DateTime(2);
+            wifiAction.type =
+                Scheduler::ActionType::WifiService;
+
+            scheduler.addAction(wifiAction);
+            TRACE("[Boot] WiFi service wake queued");
+        }
+
+        /*
+         * Configuration changes do not require a special action.
+         * Continue with the existing scheduler queue.
+         */
+
+        sleepForScheduler(scheduler, rtc);
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * Deep-sleep wake
+     * ------------------------------------------------------------------
+     *
+     * Exactly ONE action is consumed per wake.
+     */
+
+    if (!rtc.isTimeValid()) {
+        TRACE("[Boot] RTC invalid after deep-sleep wake");
+
+        /*
+         * Without a valid RTC we cannot safely execute a scheduled
+         * action. Start a service session so the user can correct the
+         * clock.
+         */
+
+        door.jitter();
+        WebPortal portal(config, rtc);
+        portal.run(kConfigPortalDurationMs);
+        config = ConfigStore::load();
+        sleepForScheduler(scheduler, rtc);
+    }
+
+    const DateTime now = rtc.now();
+    Scheduler::Action action;
+    if (!scheduler.popDueAction(now, action))
+    {
+        /*
+         * The RTC woke us but the first scheduler action is not yet
+         * due. This can happen because DS3231 Alarm1 is time-of-day
+         * based rather than date-based.
+         *
+         * Never execute an action early.
+         */
+
+        TRACE("[Boot] no due scheduler action");
+        sleepForScheduler(scheduler, rtc);
+    }
+
+#ifdef DEBUG_TRACES
+
+    TRACEF(
+        "[Boot] executing action=%s @ %lu",
+        actionTypeName(action.type),
+        static_cast<unsigned long>(
+            action.timestamp.unixtime())
+    );
+
+#endif
+
+    /*
+     * ------------------------------------------------------------------
+     * Execute exactly one action
+     * ------------------------------------------------------------------
+     */
+
+    switch (action.type) {
+        case Scheduler::ActionType::DoorOpen:
+            TRACE("[Boot] executing DoorOpen");
+            door.open();
+            break;
+
+        case Scheduler::ActionType::DoorClose:
+            TRACE("[Boot] executing DoorClose");
+            door.close();
+            break;
+
+        case Scheduler::ActionType::WifiService: {
+            TRACE("[Boot] executing WifiService");
+            door.jitter();
+            WebPortal portal(config, rtc);
+            const WebPortalRequest request =
+                portal.run(kConfigPortalDurationMs);
+
+            /*
+             * Portal may have changed configuration.
+             */
+            config = ConfigStore::load();
+
+            /*
+             * A forced operation requested during this service
+             * session is again converted into two deferred actions.
+             */
+            if (request == WebPortalRequest::FORCE_OPEN ||
+                request == WebPortalRequest::FORCE_CLOSE) {
+                Scheduler::Action doorAction;
+                doorAction.timestamp = DateTime(1);
+                doorAction.type =
+                    request == WebPortalRequest::FORCE_OPEN
+                        ? Scheduler::ActionType::DoorOpen
+                        : Scheduler::ActionType::DoorClose;
+
+                scheduler.addAction(doorAction);
+                Scheduler::Action wifiAction;
+                wifiAction.timestamp = DateTime(2);
+                wifiAction.type =
+                    Scheduler::ActionType::WifiService;
+
+                scheduler.addAction(wifiAction);
+                TRACE("[Boot] forced door action queued");
+            }
+
+            else if (request == WebPortalRequest::NAP) {
+                Scheduler::Action wifiAction;
+                wifiAction.timestamp = DateTime(2);
+                wifiAction.type =
+                    Scheduler::ActionType::WifiService;
+
+                scheduler.addAction(wifiAction);
+                TRACE("[Boot] WiFi service wake queued");
+            }
+
+            break;
         }
     }
-
-    if (wifiRequested) {
-        TRACE("[Boot] WiFi request remains active: scheduling WiFi wake");
-        Scheduler::sleepForWifi(rtc, 2);  // never returns
-    }
-
-    Scheduler::armNextAlarmAndSleep(cfg, rtc, store);  // never returns
+    // Schedule next wake
+    sleepForScheduler(scheduler, rtc);
 }
 
-void loop() {}
+
+void loop()
+{
+    // Intentionally empty.
+}

@@ -1,30 +1,48 @@
 #pragma once
 
-#include "ConfigStore.h"
+#include <cstdint>
+#include <cstddef>
+
+#include <RTClib.h>
+
+#include "Config.h"
 #include "DoorController.h"
 #include "RtcManager.h"
 
-// The Time table keeper : 
-namespace Scheduler {
+class Scheduler {
+public:
+    enum class ActionType : uint8_t {
+        DoorOpen,
+        DoorClose,
+        WifiService
+    };
 
-// Returns whether a scheduled wake may actuate. Early wakes are rejected;
-// a short post-target grace absorbs RTC/boot delay.
-bool scheduledAlarmInWindow(int64_t offsetSeconds);
+    struct Action {
+        DateTime timestamp;
+        ActionType type;
+    };
 
-// Computes the soonest of {today's remaining open, today's remaining close,
-// tomorrow's open}, arms DS3231 Alarm1 for that target, and puts the ESP32
-// into deep sleep. Also arms a multi-hour
-// timer wakeup as a safety net in case the RTC alarm is ever missed. Never
-// returns.
-[[noreturn]] void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store);
+    static constexpr size_t MAX_ACTIONS = 10;
 
-// Arms a short WiFi-only wake. It is used as the second stage after a door
-// action that requested portal access.
-[[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds = 1);
+    bool load();
+    bool save() const;
 
-// Arms a short door-action wake. The next wake performs the operation first;
-// if wifiUp is true, it then schedules a separate WiFi-only wake.
-[[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
-                                     AlarmOperateDoor operation, bool wifiUp);
+    bool addAction(const Action& action);
+    bool popDueAction(const DateTime& now, Action& action);
 
-}  // namespace Scheduler
+    const Action* nextAction() const;
+
+    bool empty() const;
+    size_t count() const;
+    void clear();
+
+private:
+    static constexpr const char* NAMESPACE = "scheduler";
+    static constexpr const char* KEY_ACTIONS = "actions";
+    static constexpr const char* KEY_COUNT = "count";
+
+    Action actions_[MAX_ACTIONS];
+    size_t count_ = 0;
+
+    void sort();
+};

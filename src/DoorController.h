@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ConfigStore.h"
+#include "Config.h"
 #include "RtcManager.h"
 
 // Owns the DRV883 pins. Timed movement only - no limit switches, no
@@ -17,13 +17,13 @@
 // not DoorController's concern.
 class DoorController {
 public:
-    DoorController(ConfigStore& store, RtcManager& rtc);
+    DoorController(Config& config, RtcManager& rtc);
 
     void begin();
     void jitter();
 
-    void open(Config& cfg);
-    void close(Config& cfg);
+    void open();
+    void close();
 
 private:
     enum class Direction : uint8_t {
@@ -35,6 +35,6 @@ private:
     void stopMoving();
     void operateDoor(uint32_t durationMs, Direction direction);
 
-    ConfigStore& store_;
+    Config& config_;
     RtcManager& rtc_;
 };
