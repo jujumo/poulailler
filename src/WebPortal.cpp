@@ -58,9 +58,9 @@ String html_escape_trace_log(const String& input)
 
 }  // namespace
 
-WebPortal::WebPortal(Config& config, RtcManager& rtc)
+WebPortal::WebPortal(Config& config, SleepManager& sleep_manager)
     : config_(config),
-      rtc_(rtc),
+      sleep_manager_(sleep_manager),
       server_(80),
       httpsStub_(443)
 {
@@ -100,25 +100,39 @@ WebPortalRequest WebPortal::run(unsigned long duration_ms)
     while (
         millis() - start < duration_ms
         && !stopRequested_
-        && request_ == WebPortalRequest::NONE
+        && (
+            request_ == WebPortalRequest::NONE
+            || request_ == WebPortalRequest::CONFIG_CHANGED
+        )
     ) {
         dnsServer_.processNextRequest();
 
         if (httpsStub_.hasClient()) {
             httpsStub_.accept().stop();
         }
-
+        //TRACE("[WebPortal] before handleClient");
         server_.handleClient();
+        //TRACE("[WebPortal] after handleClient");
         delay(2);
     }
 
+    TRACE("[WebPortal] leaving portal loop");
     httpsStub_.stop();
+    TRACE("[WebPortal] https stopped");
     server_.stop();
+    TRACE("[WebPortal] server stopped");
     dnsServer_.stop();
-
-    WiFi.softAPdisconnect(true);
+    TRACE("[WebPortal] dns stopped");
+    Serial.flush();
+    TRACE("[WebPortal] before AP disconnect");
+    WiFi.softAPdisconnect(false);
+    TRACE("[WebPortal] AP disconnected");
+    Serial.flush();
+    TRACE("[WebPortal] before WiFi off");
     WiFi.mode(WIFI_OFF);
-
+    TRACE("[WebPortal] WiFi off");
+    TRACE("[WebPortal] returning request");
+    Serial.flush();
     return request_;
 }
 
@@ -148,6 +162,11 @@ void WebPortal::setupRoutes()
         handleSleepNow();
     });
 
+    server_.on("/reset-schedule", HTTP_POST, [this]() {
+        TRACE("[WebPortal] /reset-schedule route entered");
+        handleResetSchedule();
+    });
+
     server_.on("/nap", HTTP_POST, [this]() {
         handleNapNow();
     });
@@ -157,6 +176,11 @@ void WebPortal::setupRoutes()
     });
 
     server_.onNotFound([this]() {
+        TRACEF(
+            "[WebPortal] route not found: uri=%s method=%d",
+            server_.uri().c_str(),
+            static_cast<int>(server_.method())
+        );
         redirectToRoot();
     });
 }
@@ -184,7 +208,7 @@ String WebPortal::buildIndexHtml()
         String(__DATE__) + " " + __TIME__
     );
 
-    const DateTime now_utc = rtc_.now();
+    const DateTime now_utc = sleep_manager_.now();
     const DateTime now_local =
         convert_utc_to_local(now_utc, config_.utc_offset);
 
@@ -210,7 +234,7 @@ String WebPortal::buildIndexHtml()
 
     html.replace(
         "{{NOW_SUFFIX}}",
-        rtc_.isTimeValid()
+        sleep_manager_.isTimeValid()
             ? ""
             : "<p class='rtc-alert'>RTC INVALID: set the time before "
               "the device can sleep or schedule the door.</p>"
@@ -420,7 +444,7 @@ void WebPortal::handleSaveConfig()
 {
     Config next = config_;
     bool ok = true;
-	    const DateTime now_utc = rtc_.now();
+	    const DateTime now_utc = sleep_manager_.now();
 
 #ifdef DEBUG_TRACES
     TRACEF(
@@ -690,10 +714,10 @@ void WebPortal::handleSetTime()
     );
 #endif
 
-    rtc_.setTime(utc);
+    sleep_manager_.setTime(utc);
 
 #ifdef DEBUG_TRACES
-    const DateTime read_back = rtc_.now();
+    const DateTime read_back = sleep_manager_.now();
 
     TRACEF(
         "[Time] RTC read-back=%04d-%02d-%02d %02d:%02d:%02d "
@@ -704,7 +728,7 @@ void WebPortal::handleSetTime()
         read_back.hour(),
         read_back.minute(),
         read_back.second(),
-        rtc_.isTimeValid()
+        sleep_manager_.isTimeValid()
     );
 #endif
 
@@ -723,7 +747,7 @@ void WebPortal::handlePing()
 
 void WebPortal::handleForceOpen()
 {
-    if (!rtc_.isTimeValid()) {
+    if (!sleep_manager_.isTimeValid()) {
         server_.send(
             409,
             "text/plain",
@@ -747,7 +771,7 @@ void WebPortal::handleForceOpen()
 
 void WebPortal::handleForceClose()
 {
-    if (!rtc_.isTimeValid()) {
+    if (!sleep_manager_.isTimeValid()) {
         server_.send(
             409,
             "text/plain",
@@ -769,33 +793,52 @@ void WebPortal::handleForceClose()
     );
 }
 
+
 void WebPortal::handleSleepNow()
 {
-    if (!rtc_.isTimeValid()) {
-        server_.send(
-            409,
-            "text/plain",
-            "RTC invalid - the device will remain awake "
-            "until time is synced."
-        );
-
-        return;
-    }
-
     TRACE("[WebPortal] manual sleep requested");
 
-    stopRequested_ = true;
+    TRACE("[WebPortal] before send");
 
     server_.send(
         200,
         "text/plain",
         "Going to sleep now."
     );
+
+    TRACE("[WebPortal] after send");
+
+    stopRequested_ = true;
+
+    TRACE("[WebPortal] stop requested");
 }
+
+
+void WebPortal::handleResetSchedule()
+{
+    TRACE("[WebPortal] handleResetSchedule entered");
+    TRACE("[WebPortal] reset schedule requested");
+
+    request_ = WebPortalRequest::RESET_SCHEDULE;
+    TRACEF("[WebPortal] request_ set to %d", static_cast<int>(request_));
+
+    server_.send(
+        200,
+        "text/plain",
+        "Resetting the schedule."
+    );
+
+    TRACE("[WebPortal] reset response sent");
+    TRACE("[WebPortal] before delay after reset");
+    delay(500);
+    TRACE("[WebPortal] after delay after reset");
+    Serial.flush();
+}
+
 
 void WebPortal::handleNapNow()
 {
-    if (!rtc_.isTimeValid()) {
+    if (!sleep_manager_.isTimeValid()) {
         server_.send(
             409,
             "text/plain",
@@ -806,6 +849,7 @@ void WebPortal::handleNapNow()
         return;
     }
 
+    Serial.println("[WebPortal] manual nap-and-open requested");
     TRACE("[WebPortal] manual nap-and-open requested");
 
     request_ = WebPortalRequest::NAP;

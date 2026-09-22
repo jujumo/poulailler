@@ -5,7 +5,7 @@
 #include "Debug.h"
 
 
-DoorController::DoorController(Config& config, RtcManager& rtc) : config_(config), rtc_(rtc) 
+DoorController::DoorController(Config& config) : config_(config)
 {}
 
 void DoorController::begin() {

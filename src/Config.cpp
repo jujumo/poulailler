@@ -31,7 +31,7 @@ Config load() {
     cfg.open_sun_offset = static_cast<int16_t>(prefs.getShort("open_sun_offset", cfg.open_sun_offset));
 
     cfg.close_mode = static_cast<ScheduleMode>(prefs.getUChar("close_mode", static_cast<uint8_t>(cfg.close_mode)));
-    cfg.close_timeofday = prefs.getUShort("closeAbsMin", cfg.close_timeofday);
+    cfg.close_timeofday = prefs.getUShort("close_timeofday", cfg.close_timeofday);
     cfg.close_sun_offset = static_cast<int16_t>(prefs.getShort("close_sun_offset", cfg.close_sun_offset));
 
     cfg.motor_open_duration_ms = prefs.getULong("motor_open_duration_ms", cfg.motor_open_duration_ms);

@@ -5,6 +5,7 @@
 // with -D DEBUG_TRACES (see the `esp32dev-debug` env in platformio.ini /
 // `make debug`), so normal builds don't pay for the Serial.print calls or
 // the string literals.
+
 #ifdef DEBUG_TRACES
 #include <Arduino.h>
 #include "TraceLog.h"

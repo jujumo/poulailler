@@ -1,23 +1,12 @@
 #pragma once
 
 #include "Config.h"
-#include "RtcManager.h"
 
-// Owns the DRV883 pins. Timed movement only - no limit switches, no
-// current sensing 
-
-// Always moves the motor when asked - it has no notion of "already there"
-// to skip against; whether to call open()/close() at all, and when, is
-// entirely the caller's decision (see Scheduler::decideDoorAction() and
-// WebPortal's Force Open/Close). After a move, self-timestamps via its own
-// RtcManager and records cfg.lastOperationAction (which) and
-// cfg.lastOperationUnixTime (when it REALLY happened) unconditionally,
-// regardless of caller - display-only, see ConfigStore.h. Never touches
-// cfg.lastTriggerUnixTime, which is Scheduler's own debounce bookkeeping,
-// not DoorController's concern.
+// Controls the motor driver.
+// No scheduling or position tracking.
 class DoorController {
 public:
-    DoorController(Config& config, RtcManager& rtc);
+    explicit DoorController(Config& config);
 
     void begin();
     void jitter();
@@ -28,13 +17,12 @@ public:
 private:
     enum class Direction : uint8_t {
         OPEN,
-        CLOSE,
+        CLOSE
     };
 
     void startMoving(Direction direction);
     void stopMoving();
-    void operateDoor(uint32_t durationMs, Direction direction);
+    void operateDoor(uint32_t duration_ms, Direction direction);
 
     Config& config_;
-    RtcManager& rtc_;
 };

@@ -164,13 +164,13 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
             </label>
 
             <p>
-                Next sunrise:
+                Today's sunrise:
                 <span id='sunrise_local'>{{SUNRISE_LOCAL}}</span>
                 (<span id='sunrise_utc'>{{SUNRISE_UTC}}</span> UTC)
             </p>
 
             <p>
-                Next sunset:
+                Today's sunset:
                 <span id='sunset_local'>{{SUNSET_LOCAL}}</span>
                 (<span id='sunset_utc'>{{SUNSET_UTC}}</span> UTC)
             </p>
@@ -310,6 +310,10 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
             <button type='submit'>Sleep now</button>
         </form>
 
+        <form method='POST' action='/reset-schedule' style='display:inline'>
+            <button type='submit'>Reset schedule</button>
+        </form>
+
         <form method='POST' action='/nap' style='display:inline'>
             <button type='submit'>Nap and open</button>
         </form>
@@ -334,7 +338,11 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
         }
 
         function parse_clock(value) {
-            var match = value.trim().match(/^(\d{1,2}):(\d{2})$/);
+            // Accept both HH:MM and HH:MM:SS, because the server-side
+            // DateTime formatter may include seconds.
+            var match = value.trim().match(
+                /^(\d{1,2}):(\d{2})(?::\d{2})?$/
+            );
 
             if (!match) {
                 return null;

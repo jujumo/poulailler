@@ -1,13 +1,11 @@
 #pragma once
 
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 
 #include <RTClib.h>
 
 #include "Config.h"
-#include "DoorController.h"
-#include "RtcManager.h"
 
 class Scheduler {
 public:
@@ -26,6 +24,11 @@ public:
 
     bool load();
     bool save() const;
+
+    // Rebuild the future door schedule from the current configuration.
+    // Existing future actions are preserved; new scheduled door actions are
+    // only appended after them.
+    bool update_schedule(const Config& config, const DateTime& now);
 
     bool addAction(const Action& action);
     bool popDueAction(const DateTime& now, Action& action);

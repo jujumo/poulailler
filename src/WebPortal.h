@@ -5,27 +5,23 @@
 #include <WiFiServer.h>
 
 #include "Config.h"
-#include "RtcManager.h"
+#include "SleepManager.h"
 
 enum class WebPortalRequest : uint8_t {
     NONE,
     FORCE_OPEN,
     FORCE_CLOSE,
     NAP,
+    CONFIG_CHANGED,
+    RESET_SCHEDULE,
 };
 
-// SoftAP + self-contained config web page. Instantiated for a bounded
-// duration on reset, setup, unknown, and WiFi-only wakes. Open/Close
-// requests arm a deferred action wake and therefore stop being reachable when
-// the portal is torn down.
 class WebPortal {
 public:
-    WebPortal(Config& config, RtcManager& rtc);
+    WebPortal(Config& config, SleepManager& sleep_manager);
 
-    // Starts the AP, serves the page for durationMs, then tears the AP down
-    // and returns the requested action. The caller owns all sleep and door
-    // execution decisions.
-    WebPortalRequest run(unsigned long durationMs);
+    // Serve the portal for a bounded time.
+    WebPortalRequest run(unsigned long duration_ms);
 
 private:
     void setupRoutes();
@@ -35,6 +31,7 @@ private:
     void handleForceOpen();
     void handleForceClose();
     void handleSleepNow();
+    void handleResetSchedule();
     void handleNapNow();
     void handlePing();
     void redirectToRoot();
@@ -42,7 +39,7 @@ private:
     String buildIndexHtml();
 
     Config& config_;
-    RtcManager& rtc_;
+    SleepManager& sleep_manager_;
     WebServer server_;
     DNSServer dnsServer_;
     WiFiServer httpsStub_;

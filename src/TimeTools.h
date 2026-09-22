@@ -22,7 +22,6 @@ DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset)
 int convert_time_to_timeofday(const DateTime& timestamp);
 DateTime convert_timeofday_to_time(int timeofday, const DateTime& now);
 
-
 // compute sun events in utc
 DateTime compute_sunrise_for_today(const float latitude, const float longitude, const DateTime& now_utc);
 DateTime compute_sunset_for_today(const float latitude, const float longitude, const DateTime& now_utc);
