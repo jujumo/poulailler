@@ -9,30 +9,22 @@ consumes it.
 
 ```mermaid
 flowchart TD
-    A[setup starts] --> B[Load config, RTC, and saved flags]
-    B --> C{Door action requested?}
-
-  C -->|Yes| D{WiFi requested?}
-  D -->|Yes| E[Perform immediate open or close action]
-  D -->|No| F[Compare current UTC with retained alarm UTC]
-  F -->|Within +/-2 minutes| G[Perform scheduled open or close action]
-  F -->|Outside window| H[Skip motor action]
-
-  E --> I{WiFi request active?}
-  G --> I
-  H --> I
-
-  C -->|No| J[WiFi request must be active]
-  J --> K[Serve WiFi]
-  K --> L[Consume WiFi request]
-  L --> I
-
-  I -->|Yes| M[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
-  M --> N[Go to sleep: now + 2 seconds]
-
-  I -->|No| O[Compute next door event]
-  O --> P[Set alarm: next open or close<br/>Retain UTC timestamp and door reason]
-  P --> Q[Go to sleep: next door event]
+    
+  A[setup starts] --> B[Load config and scheduler,
+  Init RTC, door ctrl.]
+  B --> C{awakening from sleep}
+  C -->|yes| D{Due action is door}
+  D -->|yes| F[actuate door]
+  
+  
+  C -->|no| M[serve web config]
+  D -->|no| M
+  M --> N[update schedule with user actions]
+  
+  F --> U[update schedule with automatic door events]
+  N --> U
+  U --> V[set alarm to next schedule event]
+  V --> W[go to sleep]
 ```
 
 ### Session behavior
@@ -58,15 +50,6 @@ timestamp. A door operation always runs first without WiFi.
  WiFi-only wake runs the portal until timeout or a user request.
 There is no in-RAM state carried between iterations:
 everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
-
-![Normal operation loop sequence diagram](operation-sequence.svg)
-
-Diagram source: [`operation-sequence.mmd`](operation-sequence.mmd) (Mermaid). Regenerate the
-SVG after editing it with:
-
-```
-npx -y @mermaid-js/mermaid-cli -i doc/operation-sequence.mmd -o doc/operation-sequence.svg -b transparent
-```
 
 ## Reading notes
 
