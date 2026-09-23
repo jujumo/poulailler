@@ -31,7 +31,7 @@ flowchart TD
 
 - **Normal scheduled door action:** retain the resolved UTC trigger timestamp
   when arming the RTC. On `EXT1`, compare the current UTC timestamp with it;
-  perform the action only from the target through the following two minutes.
+  perform the action only at the target time.
   If the wake is early, skip the motor, clear the fired alarm, and re-arm the
   same target before returning to deep sleep. If the wake is more than two
   minutes late, skip the stale action and arm the next door event.
@@ -61,8 +61,8 @@ everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
   wake, optionally followed by another WiFi wake.
 - **Scheduled movement is timestamp-gated.** `DoorController::open()`/`close()`
   always drives the motor when called. A scheduled `EXT1` wake calls it only
-  when the current UTC timestamp is at or after, and no more than two minutes
-  after, the retained alarm timestamp. An early wake re-arms that same target;
+  when the current UTC timestamp is at or after the retained alarm timestamp. 
+  An early wake re-arms that same target;
   explicit web actions bypass the scheduled check.
 - **Web open/close requests are deferred actions.** The portal closes WiFi and
   arms a one-second wake with `AlarmOperateDoor::door_open` or

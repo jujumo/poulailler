@@ -263,14 +263,10 @@ A typical cycle looks like this:
 
 The critical decision point is the schedule window used before commanding the motor.
 
-In the current implementation, the test is:
-
-- current time must be on or after the target time,
-- and not beyond the small post-target grace window.
+In the current implementation, the current time must be on or after the target time.
 
 This ensures the controller cannot fire early.
-The door may move at the target,
-but never before the requested trigger.
+The door may move at the target, but never before the requested trigger.
 
 That is the safety rule the rest of the architecture depends on.
 
