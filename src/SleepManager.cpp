@@ -1,6 +1,7 @@
 #include "SleepManager.h"
 #include "TraceLog.h"
-
+#include "TimeTools.h"
+#include "Debug.h"
 #include <Wire.h>
 #include <esp_sleep.h>
 
@@ -87,35 +88,15 @@ void SleepManager::sleepUntil(const DateTime& wakeTime)
 
     setNextAlarm(alarmTime);
 
-    Serial.printf(
-        "[Sleep] now=%04d-%02d-%02d %02d:%02d:%02d\n",
-        currentTime.year(),
-        currentTime.month(),
-        currentTime.day(),
-        currentTime.hour(),
-        currentTime.minute(),
-        currentTime.second()
-    );
-
-    Serial.printf(
-        "[Sleep] alarm=%04d-%02d-%02d %02d:%02d:%02d\n",
-        alarmTime.year(),
-        alarmTime.month(),
-        alarmTime.day(),
-        alarmTime.hour(),
-        alarmTime.minute(),
-        alarmTime.second()
-    );
-
-    Serial.printf(
-        "[Sleep] SWQ before sleep = %d\n",
-        digitalRead(PIN_RTC_SWQ)
-    );
+    TRACEF("[Sleep] now  =%s", TimeTools::convert_time_to_string(currentTime).c_str());
+    TRACEF("[Sleep] alarm=%s", TimeTools::convert_time_to_string(alarmTime).c_str());
+    TRACEF("[Sleep] SWQ before sleep = %d", digitalRead(PIN_RTC_SWQ));
 
     esp_sleep_enable_ext1_wakeup(
         1ULL << PIN_RTC_SWQ,
         ESP_EXT1_WAKEUP_ANY_LOW
     );
     Serial.flush();
-    //esp_deep_sleep_start();
+    //sleep(10);
+    esp_deep_sleep_start();
 }

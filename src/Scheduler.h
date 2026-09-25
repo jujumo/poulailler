@@ -39,6 +39,8 @@ public:
     size_t count() const;
     void clear();
 
+    void print() const;
+
 private:
     static constexpr const char* NAMESPACE = "scheduler";
     static constexpr const char* KEY_ACTIONS = "actions";

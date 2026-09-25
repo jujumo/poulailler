@@ -19,58 +19,46 @@ DateTime day_start(const DateTime& timestamp)
     );
 }
 
-DateTime scheduled_event_for_day(
+Scheduler::Action scheduled_event_for_day(
     const Config& config,
-    const DateTime& day,
+    const DateTime& day_utc,
     bool opening)
 {
-    if (
-        (opening && config.open_mode == ScheduleMode::TIME_OF_DAY)
-        || (!opening && config.close_mode == ScheduleMode::TIME_OF_DAY)
-    ) {
-        const uint16_t time_of_day =
-            opening ? config.open_timeofday : config.close_timeofday;
-
-        return day + TimeSpan(
-            0,
-            0,
-            time_of_day,
-            0
-        );
+    Scheduler::Action door_action;
+    const DateTime day_midnight(day_utc.year(), day_utc.month(), day_utc.day(), 0, 0, 0);
+    bool closing = !opening;
+    door_action.type = opening ? Scheduler::ActionType::DoorOpen 
+                               : Scheduler::ActionType::DoorClose;
+    // handle time of day envent
+    if (opening && config.open_mode == ScheduleMode::TIME_OF_DAY) 
+    {
+        door_action.timestamp = day_midnight + TimeSpan(config.open_timeofday_utc * 60L);
     }
 
-    DateTime sun_event;
-
-    if (opening) {
-        sun_event = TimeTools::compute_sunrise_for_today(
-            config.latitude,
-            config.longitude,
-            day
-        );
-
-        return sun_event + TimeSpan(
-            0,
-            0,
-            config.open_sun_offset,
-            0
-        );
+    if ( closing && config.close_mode == ScheduleMode::TIME_OF_DAY ) 
+    {
+        door_action.timestamp = day_midnight + TimeSpan(config.close_timeofday_utc * 60L);
     }
 
-    sun_event = TimeTools::compute_sunset_for_today(
-        config.latitude,
-        config.longitude,
-        day
-    );
+    // handle sun event
+    const float& lat = config.latitude;
+    const float& lon = config.longitude;
+    if (opening && config.open_mode == ScheduleMode::SUN_OFFSET) 
+    {
+        door_action.timestamp = TimeTools::compute_sunrise_for_today(lat, lon, day_midnight) 
+                        + TimeSpan(config.open_sun_offset * 60L);
+    }
+    
+    if (closing && config.close_mode == ScheduleMode::SUN_OFFSET) 
+    {
+        door_action.timestamp = TimeTools::compute_sunset_for_today(lat, lon, day_midnight) 
+                        + TimeSpan(config.close_sun_offset * 60L);
+    }
 
-    return sun_event + TimeSpan(
-        0,
-        0,
-        config.close_sun_offset,
-        0
-    );
+    return door_action;
 }
 
-bool is_scheduled_door_action(const Scheduler::Action& action)
+bool is_door_action(const Scheduler::Action& action)
 {
     if (
         action.type != Scheduler::ActionType::DoorOpen
@@ -160,12 +148,8 @@ bool Scheduler::load()
             "[Scheduler]   #%u %s @ %04d-%02d-%02d %02d:%02d:%02d (unix=%lu)",
             static_cast<unsigned>(i),
             type,
-            timestamp.year(),
-            timestamp.month(),
-            timestamp.day(),
-            timestamp.hour(),
-            timestamp.minute(),
-            timestamp.second(),
+            timestamp.year(),  timestamp.month(), timestamp.day(),
+            timestamp.hour(), timestamp.minute(), timestamp.second(),
             static_cast<unsigned long>(timestamp.unixtime())
         );
     }
@@ -209,139 +193,53 @@ bool Scheduler::save() const
 
 bool Scheduler::update_schedule(const Config& config, const DateTime& now)
 {
-    size_t future_scheduled_count = 0;
-    DateTime search_after = now;
-    bool have_future_scheduled_action = false;
-
-    // Existing scheduled actions are the debounce boundary. New scheduled
-    // actions are added only after the last one already in the future.
+    size_t nb_door_actions = 0;
+    DateTime last_door_action_timestamp = now;
+    // count door action in the future
     for (size_t i = 0; i < count_; ++i) {
         const Action& action = actions_[i];
-
-        if (!is_scheduled_door_action(action)) {
+        if (!is_door_action(action)) {
             continue;
         }
-
-        if (action.timestamp.unixtime() <= now.unixtime()) {
-            continue;
-        }
-
-        ++future_scheduled_count;
-
-        if (
-            !have_future_scheduled_action
-            || action.timestamp.unixtime() > search_after.unixtime()
-        ) {
-            search_after = action.timestamp;
-            have_future_scheduled_action = true;
-        }
-    }
-
-    if (future_scheduled_count >= 2) {
-        return true;
+        ++nb_door_actions;
+        last_door_action_timestamp = action.timestamp;
     }
 
     TRACEF(
-        "[Scheduler] update_schedule: %u future scheduled door action(s)",
-        static_cast<unsigned>(future_scheduled_count)
+        "[Scheduler] update_schedule: %u scheduled door action(s)",
+        static_cast<unsigned>(nb_door_actions)
     );
 
-    size_t added_count = 0;
-    DateTime day = day_start(search_after);
-
-    if (count_ >= MAX_ACTIONS) {
-        TRACE("[Scheduler] update_schedule: action list is full");
-        return false;
+    // if 2 door action already planned, no need to add more for now
+    if (nb_door_actions >= 2) {
+        return true;
     }
 
-    // Search forward one day at a time. Each day has at most two scheduled
-    // door events: open and close. We always choose the earliest event strictly
-    // after the current debounce boundary, then continue from that event.
-    while (future_scheduled_count + added_count < 2) {
-        DateTime best_timestamp;
-        ActionType best_type = ActionType::DoorOpen;
-        bool found = false;
-
-        const DateTime open_timestamp =
-            scheduled_event_for_day(config, day, true);
-        const DateTime close_timestamp =
-            scheduled_event_for_day(config, day, false);
-
-        if (open_timestamp.unixtime() > search_after.unixtime()) {
-            best_timestamp = open_timestamp;
-            best_type = ActionType::DoorOpen;
-            found = true;
+    // generates candidates open/close actions, then filter out the ones already passed.
+    // add the remaining to the schedule (even if theire are more than 2).
+    DateTime today(now);
+    Action candidate_door_actions[4];
+    candidate_door_actions[0] = scheduled_event_for_day(config, today, /*opening=*/true);
+    candidate_door_actions[1] = scheduled_event_for_day(config, today, /*opening=*/false);
+    DateTime tomorrow = today + TimeSpan(1, 0, 0, 0);
+    candidate_door_actions[2] = scheduled_event_for_day(config, tomorrow, /*opening=*/true);
+    candidate_door_actions[3] = scheduled_event_for_day(config, tomorrow, /*opening=*/false);
+    for (int i=0; i<4; ++i)  
+    {
+        // only add after last door action timestamp, to avoid adding duplicates
+        if (candidate_door_actions[i].timestamp > last_door_action_timestamp)
+        { // future
+            addAction(candidate_door_actions[i]);
         }
-
-        if (close_timestamp.unixtime() > search_after.unixtime()) {
-            if (
-                !found
-                || close_timestamp.unixtime() < best_timestamp.unixtime()
-            ) {
-                best_timestamp = close_timestamp;
-                best_type = ActionType::DoorClose;
-                found = true;
-            }
-        }
-
-        if (!found) {
-            day = day + TimeSpan(1, 0, 0, 0);
-            continue;
-        }
-
-        bool duplicate = false;
-
-        for (size_t i = 0; i < count_; ++i) {
-            if (
-                same_action(
-                    actions_[i],
-                    best_timestamp,
-                    best_type
-                )
-            ) {
-                duplicate = true;
-                break;
-            }
-        }
-
-        if (!duplicate && count_ < MAX_ACTIONS) {
-            Action action;
-            action.timestamp = best_timestamp;
-            action.type = best_type;
-
-            actions_[count_++] = action;
-            ++added_count;
-
-#ifdef DEBUG_TRACES
-            TRACEF(
-                "[Scheduler] added %s @ %lu",
-                best_type == ActionType::DoorOpen
-                    ? "DoorOpen"
-                    : "DoorClose",
-                static_cast<unsigned long>(
-                    best_timestamp.unixtime()
-                )
-            );
-#endif
-        }
-
-        search_after = best_timestamp;
-        day = day_start(search_after);
     }
-
-    sort();
-
-    if (added_count == 0) {
-        TRACE("[Scheduler] update_schedule: no new action added");
-        return future_scheduled_count >= 2 || count_ >= MAX_ACTIONS;
-    }
-
+    /////////////////////////////////
     return save();
 }
 
 bool Scheduler::addAction(const Action& action)
 {
     if (count_ >= MAX_ACTIONS) {
+        TRACE("cannot add action : schedule is full.");
         return false;
     }
 
@@ -416,5 +314,45 @@ void Scheduler::sort()
         }
 
         actions_[j] = current;
+    }
+}
+
+void Scheduler::print() const
+{
+    TRACEF("[Scheduler] %u action(s)", static_cast<unsigned>(count_));
+
+    for (size_t i = 0; i < count_; ++i) {
+        const Action& action = actions_[i];
+
+        const char* type = "UNKNOWN";
+
+        switch (action.type) {
+            case ActionType::DoorOpen:
+                type = "DoorOpen";
+                break;
+
+            case ActionType::DoorClose:
+                type = "DoorClose";
+                break;
+
+            case ActionType::WifiService:
+                type = "WifiService";
+                break;
+        }
+
+        const DateTime& timestamp = action.timestamp;
+
+        TRACEF(
+            "[Scheduler]   #%u %s @ %04d-%02d-%02d %02d:%02d:%02d (unix=%lu)",
+            static_cast<unsigned>(i),
+            type,
+            timestamp.year(),
+            timestamp.month(),
+            timestamp.day(),
+            timestamp.hour(),
+            timestamp.minute(),
+            timestamp.second(),
+            static_cast<unsigned long>(timestamp.unixtime())
+        );
     }
 }

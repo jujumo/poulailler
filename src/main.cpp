@@ -52,65 +52,8 @@ const char* doorActionName(DoorAction action)
     }
 }
 
-void traceScheduler(const Scheduler& scheduler)
-{
-    TRACEF("[Scheduler] %u action(s)",
-           static_cast<unsigned>(scheduler.count()));
-
-    const Scheduler::Action* action = scheduler.nextAction();
-    if (action != nullptr) {
-        TRACEF("[Scheduler] next=%s @ %lu",
-               actionTypeName(action->type),
-               static_cast<unsigned long>(
-                   action->timestamp.unixtime()));
-    }
-}
-
 #endif
 
-void queueRequest(
-    Scheduler& scheduler,
-    SleepManager& sleep_manager,
-    WebPortalRequest request)
-{
-    if (request == WebPortalRequest::FORCE_OPEN ||
-        request == WebPortalRequest::FORCE_CLOSE) {
-
-        const DateTime now = sleep_manager.now();
-
-        Scheduler::Action doorAction;
-        doorAction.timestamp = now;
-        doorAction.type =
-            request == WebPortalRequest::FORCE_OPEN
-                ? Scheduler::ActionType::DoorOpen
-                : Scheduler::ActionType::DoorClose;
-
-        TRACE("[Main] queueRequest: adding door action");
-        scheduler.addAction(doorAction);
-        TRACE("[Main] queueRequest: door action added");
-
-        Scheduler::Action wifiAction;
-        wifiAction.timestamp = now + TimeSpan(0, 0, 0, 2);
-        wifiAction.type = Scheduler::ActionType::WifiService;
-
-        TRACE("[Main] queueRequest: adding WiFi action");
-        scheduler.addAction(wifiAction);
-        TRACE("[Main] queueRequest: WiFi action added");
-
-        TRACE("[Boot] forced door action queued");
-    }
-    else if (request == WebPortalRequest::NAP) {
-        Scheduler::Action wifiAction;
-        wifiAction.timestamp = DateTime(2);
-        wifiAction.type = Scheduler::ActionType::WifiService;
-
-        TRACE("[Main] queueRequest: adding WiFi service action");
-        scheduler.addAction(wifiAction);
-        TRACE("[Main] queueRequest: WiFi service action added");
-
-        TRACE("[Boot] WiFi service wake queued");
-    }
-}
 
 WebPortalRequest runPortal(
     Config& config,
@@ -136,71 +79,55 @@ void processPortalRequest(
     SleepManager& sleep_manager,
     Scheduler& scheduler)
 {
-    const WebPortalRequest request =
-        runPortal(config, sleep_manager);
-
-    if (request == WebPortalRequest::CONFIG_CHANGED) {
-        TRACE("[Main] configuration changed: clearing scheduler");
-
-        scheduler.clear();
-
-        if (sleep_manager.isTimeValid()) {
-            const DateTime now = sleep_manager.now();
-            TRACE("[Main] rebuilding schedule after configuration change");
-            if (!scheduler.update_schedule(config, now)) {
-                TRACE("[Main] schedule rebuild failed after configuration change");
-            }
-        }
-        else {
-            TRACE(
-                "[Main] cannot rebuild schedule after configuration change: "
-                "RTC invalid"
-            );
-        }
-
+    const WebPortalRequest request = runPortal(config, sleep_manager);
+    if (!sleep_manager.isTimeValid()) 
+    {
+        TRACE("[Main::web] ERROR: RTC invalid. no request handled.");
         return;
     }
+    TRACEF("[Main::web] after run request = %d", request);
+    ConfigStore::print(config);
+    Serial.flush();
+    sleep(2);
 
-    if (request == WebPortalRequest::RESET_SCHEDULE) {
-        TRACE("[Main] resetting scheduler");
+    const DateTime now = sleep_manager.now();
+    //// CONFIG CHANGED /////////////////////////////////////////////////////
+    // nothing 
+    
+    //// FORCE DOOR ////////////////////////////////////////////////////////////
+    if (request == WebPortalRequest::FORCE_OPEN ||
+        request == WebPortalRequest::FORCE_CLOSE) 
+    {
+        TRACE("[Main::web] Force door action requested.");
+        Scheduler::Action doorAction;
+        doorAction.timestamp = now;
+        doorAction.type = request == WebPortalRequest::FORCE_OPEN
+                            ? Scheduler::ActionType::DoorOpen
+                            : Scheduler::ActionType::DoorClose;
 
-        scheduler.clear();
+        scheduler.addAction(doorAction);
+        TRACE("[Main::web] door action added.");
 
-        if (sleep_manager.isTimeValid()) {
-            const DateTime now = sleep_manager.now();
-
-            TRACE("[Main] rebuilding schedule after scheduler reset");
-
-            if (!scheduler.update_schedule(config, now)) {
-                TRACE("[Main] schedule rebuild failed after scheduler reset");
-            }
-        }
-        else {
-            TRACE(
-                "[Main] cannot rebuild schedule after scheduler reset: "
-                "RTC invalid"
-            );
-        }
-
-        return;
+        Scheduler::Action wifiAction;
+        wifiAction.timestamp = now + TimeSpan(0, 0, 0, 2);
+        wifiAction.type = Scheduler::ActionType::WifiService;
+        scheduler.addAction(wifiAction);
+        TRACE("[Main::web] WiFi action added");
+    }
+    
+    //// NAP //////////////////////////////////////////////////////////////////////
+    if (request == WebPortalRequest::NAP) 
+    {
+        TRACE("[Main::web] Nap requested.");
+        Scheduler::Action wifiAction;
+        wifiAction.timestamp = now+ TimeSpan(0, 0, 0, 10);
+        wifiAction.type = Scheduler::ActionType::WifiService;
+        scheduler.addAction(wifiAction);
+        TRACE("[Main::web] WiFi action added");
     }
 
-    TRACE("[Main] before queueRequest");
-    queueRequest(scheduler, sleep_manager, request);
-    TRACE("[Main] after queueRequest");
-
-    if (sleep_manager.isTimeValid()) {
-        const DateTime now = sleep_manager.now();
-
-        TRACE("[Main] updating schedule after portal");
-
-        if (!scheduler.update_schedule(config, now)) {
-            TRACE("[Main] schedule update after portal failed");
-        }
-    }
-    else {
-        TRACE("[Main] skipping schedule update after portal: RTC invalid");
-    }
+    TRACE("[Main::web] done.");
+    scheduler.print();
 }
 } // namespace
 
@@ -213,21 +140,16 @@ void setup()
         delay(10);
     }
 #   ifdef DEBUG_TRACES
-    Serial.println("Bonjour from Poulailler!");
+    Serial.println("[Boot] Bonjour from Poulailler!");
 #   endif
     pinMode(PIN_STATUS_LED, OUTPUT);
     digitalWrite(PIN_STATUS_LED, HIGH);
 
-    TRACE("[Boot] before ConfigStore::load");
     Config config = ConfigStore::load();
-    TRACE("[Boot] after ConfigStore::load");
-#   ifdef DEBUG_TRACES
-    Serial.println("[Boot] config loaded!");
-#   endif
-    TRACE("[Boot] before SleepManager construction");
+    ConfigStore::print(config);
+    TRACE("[Boot] config loaded!");
+
     SleepManager sleep_manager;
-    TRACE("[Boot] after SleepManager construction");
-    TRACE("[Boot] before SleepManager::begin");
     if (!sleep_manager.begin()) {
         TRACE("[Boot] SleepManager initialization failed");
         digitalWrite(PIN_STATUS_LED, LOW);
@@ -235,57 +157,31 @@ void setup()
             delay(1000);
         }
     }
-#   ifdef DEBUG_TRACES    
-    Serial.println("[Boot] sleep_manager loaded!");
-#   endif
-    TRACE("[Boot] before Scheduler construction");
+    TRACE("[Boot] sleep_manager loaded!");
+
     Scheduler scheduler;
-    TRACE("[Boot] after Scheduler construction");
-    TRACE("[Boot] before Scheduler::load");
     if (!scheduler.load()) {
         TRACE("[Boot] scheduler load failed");
     }
-#   ifdef DEBUG_TRACES      
-    Serial.println("[Boot] scheduler loaded!");
-#   endif
-    TRACE("[Boot] before DoorController construction");
+    scheduler.print();
+    TRACE("[Boot] scheduler loaded!");
+
     DoorController door(config);
-    TRACE("[Boot] after DoorController construction");
-    TRACE("[Boot] before DoorController::begin");
     door.begin();
-    TRACE("[Boot] after DoorController::begin");
-#   ifdef DEBUG_TRACES      
-    Serial.println("[Boot] door loaded!");
-#   endif
-    TRACE("[Boot] before sleep_manager.wakeCause");
+    TRACE("[Boot] door loaded!");
+    
     const SleepManager::WakeCause wake_cause = sleep_manager.wakeCause();
     TRACEF("[Boot] wake_cause enum=%d", static_cast<int>(wake_cause));
 
-#   ifdef DEBUG_TRACES
-
-    TRACEF("[Boot] wake cause=%s",
-           wakeCauseName(wake_cause));
-
+    TRACEF("[Boot] wake cause=%s", wakeCauseName(wake_cause));
     if (sleep_manager.isTimeValid()) {
         const DateTime now = sleep_manager.now();
-        TRACEF(
-            "[Boot] RTC=%04d-%02d-%02d %02d:%02d:%02d UTC",
-            now.year(),
-            now.month(),
-            now.day(),
-            now.hour(),
-            now.minute(),
-            now.second());
+        TRACEF("[Boot] RTC=%s UTC", TimeTools::convert_time_to_string(now).c_str());
     }
     else {
         TRACE("[Boot] RTC time is invalid");
     }
 
-    TRACE("[Boot] before traceScheduler");
-    traceScheduler(scheduler);
-    TRACE("[Boot] after traceScheduler");
-
-#   endif //DEBUG_TRACES
 
     /*
      * Unified wake dispatcher.
@@ -311,15 +207,15 @@ void setup()
         (first_action->type == Scheduler::ActionType::DoorOpen ||
          first_action->type == Scheduler::ActionType::DoorClose);
 
-    if (wake_cause == SleepManager::WakeCause::POWER_ON ||
-        wifi_service_due) {
-
-        TRACE(
-            wake_cause == SleepManager::WakeCause::POWER_ON
-                ? "[Boot] power-on/reset: starting WiFi portal"
-                : "[Boot] due WifiService: starting WiFi portal"
-        );
-
+    if (wake_cause == SleepManager::WakeCause::POWER_ON )
+    {
+        TRACE("[main] power-on/reset: starting WiFi portal");
+        scheduler.clear(); // lets start on clean slate (in case of power-on/reset)
+        processPortalRequest(config, sleep_manager, scheduler);
+    }
+    else if (wifi_service_due) 
+    {
+        TRACE("[main] due WifiService: starting WiFi portal");
         processPortalRequest(config, sleep_manager, scheduler);
     }
     else if (door_action_due) {
@@ -390,13 +286,15 @@ void setup()
         "[Main] nextAction ptr (final)=%p",
         static_cast<void*>(const_cast<Scheduler::Action*>(next))
     );
+    ConfigStore::print(config);
+    scheduler.print();
 
     if (next != nullptr) {
         TRACE("[Main] before final sleepUntil");
         sleep_manager.sleepUntil(next->timestamp);
     }
 
-    TRACE("[Main] scheduler empty after wake");
+    TRACE("[Main] after sleepUntil : SHOULD NEVER SEE THIS !");
 }
 
 void loop()

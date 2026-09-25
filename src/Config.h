@@ -50,11 +50,11 @@ struct Config {
     float utc_offset = DEFAULT_UTC_OFFSET;
 	
     ScheduleMode open_mode = ScheduleMode::TIME_OF_DAY;
-    uint16_t open_timeofday = 540;   // UTC time-of-day (540 = 9h = 7h local)
+    uint16_t open_timeofday_utc = 540;   // UTC time-of-day (540 = 9h = 7h local)
     int16_t open_sun_offset = 0;  // relative to sunrise
 
     ScheduleMode close_mode = ScheduleMode::SUN_OFFSET;
-    uint16_t close_timeofday = 1380;   // UTC time-of-day (1380 = 23h = 21h local)
+    uint16_t close_timeofday_utc = 1380;   // UTC time-of-day (1380 = 23h = 21h local)
     int16_t close_sun_offset = 30; // relative to sunset
 
     uint32_t motor_open_duration_ms = kMotorOpenDurationMs;
@@ -69,4 +69,5 @@ namespace ConfigStore {
     void clear();  // Clear all stored config values in case of firmware recompile.
     Config load();   // load from NVS, returning defaults for any missing fields
     bool save(const Config& cfg);
+    void print(const Config& cfg);
 } //namespace ConfigStore

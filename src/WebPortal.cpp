@@ -100,13 +100,9 @@ WebPortalRequest WebPortal::run(unsigned long duration_ms)
     while (
         millis() - start < duration_ms
         && !stopRequested_
-        && (
-            request_ == WebPortalRequest::NONE
-            || request_ == WebPortalRequest::CONFIG_CHANGED
-        )
+        && request_ == WebPortalRequest::NONE
     ) {
         dnsServer_.processNextRequest();
-
         if (httpsStub_.hasClient()) {
             httpsStub_.accept().stop();
         }
@@ -160,11 +156,6 @@ void WebPortal::setupRoutes()
 
     server_.on("/sleep", HTTP_POST, [this]() {
         handleSleepNow();
-    });
-
-    server_.on("/reset-schedule", HTTP_POST, [this]() {
-        TRACE("[WebPortal] /reset-schedule route entered");
-        handleResetSchedule();
     });
 
     server_.on("/nap", HTTP_POST, [this]() {
@@ -301,7 +292,7 @@ String WebPortal::buildIndexHtml()
 		(
 			convert_utc_to_local
 			(
-				convert_timeofday_to_time(config_.open_timeofday, now_utc),
+				convert_timeofday_to_time(config_.open_timeofday_utc, now_utc),
 				config_.utc_offset
 			)
         );
@@ -319,7 +310,7 @@ String WebPortal::buildIndexHtml()
     );
 
     const int open_timeofday_utc =
-        config_.open_timeofday;
+        config_.open_timeofday_utc;
 
     html.replace(
         "{{OPEN_TIMEOFDAY_UTC}}",
@@ -343,7 +334,7 @@ String WebPortal::buildIndexHtml()
 		(
 			convert_utc_to_local
 			(
-				convert_timeofday_to_time(config_.close_timeofday, now_utc),
+				convert_timeofday_to_time(config_.close_timeofday_utc, now_utc),
 				config_.utc_offset
 			)
         );
@@ -361,7 +352,7 @@ String WebPortal::buildIndexHtml()
     );
 
     const int close_timeofday_utc =
-        config_.close_timeofday;
+        config_.close_timeofday_utc;
 
     html.replace(
         "{{CLOSE_TIMEOFDAY_UTC}}",
@@ -444,15 +435,13 @@ void WebPortal::handleSaveConfig()
 {
     Config next = config_;
     bool ok = true;
-	    const DateTime now_utc = sleep_manager_.now();
+	const DateTime now_utc = sleep_manager_.now();
 
-#ifdef DEBUG_TRACES
     TRACEF(
-        "[WebPortal] POST /save: open_mode=%s "
-        "open_timeofday_local=%s open_sun_offset=%s "
-        "close_mode=%s close_timeofday_local=%s "
-        "close_sun_offset=%s motor_open_duration_ms=%s "
-        "motor_close_duration_ms=%s",
+        "[WebPortal] POST /save: "
+        "\n\topen_mode=%s open_timeofday_local=%s open_sun_offset=%s "
+        "\n\tclose_mode=%s close_timeofday_local=%s close_sun_offset=%s "
+        "\n\tmotor_open_duration_ms=%s tmotor_close_duration_ms=%s",
         server_.arg("open_mode").c_str(),
         server_.arg("open_timeofday_local").c_str(),
         server_.arg("open_sun_offset").c_str(),
@@ -462,12 +451,9 @@ void WebPortal::handleSaveConfig()
         server_.arg("motor_open_duration_ms").c_str(),
         server_.arg("motor_close_duration_ms").c_str()
     );
-#endif
 
     if (server_.hasArg("latitude")) {
-        const float value =
-            server_.arg("latitude").toFloat();
-
+        const float value = server_.arg("latitude").toFloat();
         if (in_range(value, -90.0f, 90.0f)) {
             next.latitude = value;
         } else {
@@ -476,9 +462,7 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("longitude")) {
-        const float value =
-            server_.arg("longitude").toFloat();
-
+        const float value = server_.arg("longitude").toFloat();
         if (in_range(value, -180.0f, 180.0f)) {
             next.longitude = value;
         } else {
@@ -487,9 +471,7 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("utc_offset")) {
-        const float value =
-            server_.arg("utc_offset").toFloat();
-
+        const float value = server_.arg("utc_offset").toFloat();
         if (in_range(value, -12.0f, 12.0f)) {
             next.utc_offset = value;
         } else {
@@ -498,19 +480,17 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("open_mode")) {
-        next.open_mode =
-            server_.arg("open_mode") == "sun"
+        next.open_mode = server_.arg("open_mode") == "sun"
                 ? ScheduleMode::SUN_OFFSET
                 : ScheduleMode::TIME_OF_DAY;
     }
 
     if (server_.hasArg("open_timeofday_local")) {
         const int open_timeofday_local = convert_string_to_timeofday(
-                server_.arg("open_timeofday_local")
-            );
-
-        if (valid_timeofday(open_timeofday_local)) {
-            next.open_timeofday =
+                                            server_.arg("open_timeofday_local"));
+        if (valid_timeofday(open_timeofday_local)) 
+        {
+            next.open_timeofday_utc = 
                 convert_time_to_timeofday
 				(
 					convert_local_to_utc
@@ -525,12 +505,9 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("open_sun_offset")) {
-        const int value =
-            server_.arg("open_sun_offset").toInt();
-
+        const int value = server_.arg("open_sun_offset").toInt();
         if (value >= -720 && value <= 720) {
-            next.open_sun_offset =
-                static_cast<int16_t>(value);
+            next.open_sun_offset = static_cast<int16_t>(value);
         } else {
             ok = false;
         }
@@ -550,7 +527,7 @@ void WebPortal::handleSaveConfig()
             );
 
         if (valid_timeofday(close_timeofday_local)) {
-            next.close_timeofday =
+            next.close_timeofday_utc =
                 convert_time_to_timeofday
 				(
 					convert_local_to_utc
@@ -565,63 +542,47 @@ void WebPortal::handleSaveConfig()
     }
 
     if (server_.hasArg("close_sun_offset")) {
-        const int value =
-            server_.arg("close_sun_offset").toInt();
-
+        const int value = server_.arg("close_sun_offset").toInt();
         if (value >= -720 && value <= 720) {
-            next.close_sun_offset =
-                static_cast<int16_t>(value);
+            next.close_sun_offset = static_cast<int16_t>(value);
         } else {
             ok = false;
         }
     }
 
     if (server_.hasArg("motor_open_duration_ms")) {
-        const long value =
-            server_.arg("motor_open_duration_ms").toInt();
-
+        const long value = server_.arg("motor_open_duration_ms").toInt();
         if (value > 0 && value <= 120000) {
-            next.motor_open_duration_ms =
-                static_cast<uint32_t>(value);
+            next.motor_open_duration_ms = static_cast<uint32_t>(value);
         } else {
             ok = false;
         }
     }
 
     if (server_.hasArg("motor_close_duration_ms")) {
-        const long value =
-            server_.arg("motor_close_duration_ms").toInt();
-
+        const long value = server_.arg("motor_close_duration_ms").toInt();
         if (value > 0 && value <= 120000) {
-            next.motor_close_duration_ms =
-                static_cast<uint32_t>(value);
+            next.motor_close_duration_ms = static_cast<uint32_t>(value);
         } else {
             ok = false;
         }
     }
 
     // A checkbox is absent from the POST when unchecked.
-    next.motor_invert_direction =
-        server_.hasArg("motor_invert_direction");
+    next.motor_invert_direction = server_.hasArg("motor_invert_direction");
 
     if (!ok) {
-        TRACE(
-            "[WebPortal] POST /save: rejected as invalid, "
-            "nothing saved"
-        );
-
+        TRACE("[WebPortal] ERROR : POST /save: rejected as invalid, nothing saved");
         server_.send(
             400,
             "text/plain",
             "Invalid input - nothing was saved. "
             "Go back and check the values."
         );
-
         return;
     }
 
     next.configured = true;
-
     if (!ConfigStore::save(next)) {
         TRACE(
             "[WebPortal] POST /save: failed to persist settings"
@@ -636,7 +597,11 @@ void WebPortal::handleSaveConfig()
         return;
     }
 
+    TRACE("[WebPortal] Config before modifcation");
+    ConfigStore::print(config_);
     config_ = next;
+    TRACE("[WebPortal] Config after modifcation");
+    ConfigStore::print(config_);
 
     statusMessage_ = "Settings saved.";
     redirectToRoot();
@@ -812,29 +777,6 @@ void WebPortal::handleSleepNow()
 
     TRACE("[WebPortal] stop requested");
 }
-
-
-void WebPortal::handleResetSchedule()
-{
-    TRACE("[WebPortal] handleResetSchedule entered");
-    TRACE("[WebPortal] reset schedule requested");
-
-    request_ = WebPortalRequest::RESET_SCHEDULE;
-    TRACEF("[WebPortal] request_ set to %d", static_cast<int>(request_));
-
-    server_.send(
-        200,
-        "text/plain",
-        "Resetting the schedule."
-    );
-
-    TRACE("[WebPortal] reset response sent");
-    TRACE("[WebPortal] before delay after reset");
-    delay(500);
-    TRACE("[WebPortal] after delay after reset");
-    Serial.flush();
-}
-
 
 void WebPortal::handleNapNow()
 {

@@ -12,8 +12,6 @@ enum class WebPortalRequest : uint8_t {
     FORCE_OPEN,
     FORCE_CLOSE,
     NAP,
-    CONFIG_CHANGED,
-    RESET_SCHEDULE,
 };
 
 class WebPortal {
@@ -31,7 +29,6 @@ private:
     void handleForceOpen();
     void handleForceClose();
     void handleSleepNow();
-    void handleResetSchedule();
     void handleNapNow();
     void handlePing();
     void redirectToRoot();
