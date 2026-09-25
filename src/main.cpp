@@ -66,11 +66,6 @@ WebPortalRequest runPortal(
         portal.run(kConfigPortalDurationMs);
     TRACE("[Main] after portal.run");
     TRACEF("[Main] request=%d", static_cast<int>(request));
-
-    TRACE("[Main] before ConfigStore::load after portal");
-    config = ConfigStore::load();
-    TRACE("[Main] after ConfigStore::load after portal");
-
     return request;
 }
 
@@ -211,6 +206,7 @@ void setup()
     {
         TRACE("[main] power-on/reset: starting WiFi portal");
         scheduler.clear(); // lets start on clean slate (in case of power-on/reset)
+        ConfigStore::clear();
         processPortalRequest(config, sleep_manager, scheduler);
     }
     else if (wifi_service_due) 

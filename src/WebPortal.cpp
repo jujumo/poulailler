@@ -68,7 +68,6 @@ WebPortal::WebPortal(Config& config, SleepManager& sleep_manager)
 
 WebPortalRequest WebPortal::run(unsigned long duration_ms)
 {
-    //config_ = ConfigStore::load();
     WiFi.onEvent(
         [](arduino_event_id_t event, arduino_event_info_t info) {
             TRACE("[WiFi] client connected");
@@ -114,19 +113,10 @@ WebPortalRequest WebPortal::run(unsigned long duration_ms)
 
     TRACE("[WebPortal] leaving portal loop");
     httpsStub_.stop();
-    TRACE("[WebPortal] https stopped");
     server_.stop();
-    TRACE("[WebPortal] server stopped");
     dnsServer_.stop();
-    TRACE("[WebPortal] dns stopped");
-    Serial.flush();
-    TRACE("[WebPortal] before AP disconnect");
     WiFi.softAPdisconnect(false);
-    TRACE("[WebPortal] AP disconnected");
-    Serial.flush();
-    TRACE("[WebPortal] before WiFi off");
     WiFi.mode(WIFI_OFF);
-    TRACE("[WebPortal] WiFi off");
     TRACE("[WebPortal] returning request");
     Serial.flush();
     return request_;
@@ -194,98 +184,36 @@ String WebPortal::buildIndexHtml()
     }
 
     html.replace("{{STATUS_BLOCK}}", status_block);
-    html.replace(
-        "{{COMPILE_TIME}}",
-        String(__DATE__) + " " + __TIME__
-    );
+    html.replace( "{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__ );
 
     const DateTime now_utc = sleep_manager_.now();
-    const DateTime now_local =
-        convert_utc_to_local(now_utc, config_.utc_offset);
+    const DateTime now_local = convert_utc_to_local(now_utc, config_.utc_offset);
 
     char utc_offset_str[16];
-    snprintf(
-        utc_offset_str,
-        sizeof(utc_offset_str),
-        "%g",
-        static_cast<double>(config_.utc_offset)
-    );
-
-    html.replace(
-        "{{UTC_TIME}}",
-        convert_time_to_string(now_utc)
-    );
-
-    html.replace(
-        "{{LOCAL_TIME}}",
-        convert_time_to_string(now_local)
-    );
-
-    html.replace("{{UTC_OFFSET}}", utc_offset_str);
-
-    html.replace(
-        "{{NOW_SUFFIX}}",
-        sleep_manager_.isTimeValid()
+    snprintf(utc_offset_str, sizeof(utc_offset_str), "%g", static_cast<double>(config_.utc_offset));
+    html.replace( "{{UTC_TIME}}", convert_time_to_string(now_utc) );
+    html.replace( "{{LOCAL_TIME}}", convert_time_to_string(now_local) );
+    html.replace( "{{UTC_OFFSET}}", utc_offset_str );
+    html.replace( "{{NOW_SUFFIX}}", sleep_manager_.isTimeValid()
             ? ""
             : "<p class='rtc-alert'>RTC INVALID: set the time before "
               "the device can sleep or schedule the door.</p>"
     );
 
-    html.replace(
-        "{{LATITUDE}}",
-        String(config_.latitude, 4)
-    );
+    html.replace( "{{LATITUDE}}", String(config_.latitude, 4) );
+    html.replace( "{{LONGITUDE}}", String(config_.longitude, 4) );
 
-    html.replace(
-        "{{LONGITUDE}}",
-        String(config_.longitude, 4)
-    );
+    const DateTime sunrise_utc = compute_sunrise_for_today( config_.latitude, config_.longitude, now_utc );
+    const DateTime sunrise_local = convert_utc_to_local( sunrise_utc, config_.utc_offset );
 
-    const DateTime sunrise_utc =
-        compute_sunrise_for_today(
-            config_.latitude,
-            config_.longitude,
-            now_utc
-        );
+    html.replace( "{{SUNRISE_LOCAL}}", convert_time_to_string(sunrise_local) );
+    html.replace( "{{SUNRISE_UTC}}", convert_time_to_string(sunrise_utc));
 
-    const DateTime sunrise_local =
-        convert_utc_to_local(
-            sunrise_utc,
-            config_.utc_offset
-        );
+    const DateTime sunset_utc = compute_sunset_for_today( config_.latitude, config_.longitude, now_utc);
+    const DateTime sunset_local = convert_utc_to_local( sunset_utc, config_.utc_offset );
 
-    html.replace(
-        "{{SUNRISE_LOCAL}}",
-        convert_time_to_string(sunrise_local)
-    );
-
-    html.replace(
-        "{{SUNRISE_UTC}}",
-        convert_time_to_string(sunrise_utc)
-    );
-
-    const DateTime sunset_utc =
-        compute_sunset_for_today(
-            config_.latitude,
-            config_.longitude,
-            now_utc
-        );
-
-    const DateTime sunset_local =
-        convert_utc_to_local(
-            sunset_utc,
-            config_.utc_offset
-        );
-
-    html.replace(
-        "{{SUNSET_LOCAL}}",
-        convert_time_to_string(sunset_local)
-    );
-
-    html.replace(
-        "{{SUNSET_UTC}}",
-        convert_time_to_string(sunset_utc)
-    );
+    html.replace( "{{SUNSET_LOCAL}}", convert_time_to_string(sunset_local));
+    html.replace( "{{SUNSET_UTC}}", convert_time_to_string(sunset_utc));
 
     const int open_timeofday_local =
 		convert_time_to_timeofday
@@ -297,37 +225,19 @@ String WebPortal::buildIndexHtml()
 			)
         );
 
-    html.replace(
-        "{{OPEN_TIMEOFDAY_CHECKED}}",
-        config_.open_mode == ScheduleMode::TIME_OF_DAY
-            ? " checked"
-            : ""
+    html.replace( "{{OPEN_TIMEOFDAY_CHECKED}}", config_.open_mode == ScheduleMode::TIME_OF_DAY
+                                                ? " checked"
+                                                : ""
+    );
+    html.replace( "{{OPEN_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(open_timeofday_local) );
+    const int open_timeofday_utc = config_.open_timeofday_utc;
+    html.replace( "{{OPEN_TIMEOFDAY_UTC}}", convert_timeofday_to_string(open_timeofday_utc) );
+    html.replace( "{{OPEN_SUN_CHECKED}}", config_.open_mode == ScheduleMode::SUN_OFFSET
+                                        ? " checked"
+                                        : ""
     );
 
-    html.replace(
-        "{{OPEN_TIMEOFDAY_LOCAL}}",
-        convert_timeofday_to_string(open_timeofday_local)
-    );
-
-    const int open_timeofday_utc =
-        config_.open_timeofday_utc;
-
-    html.replace(
-        "{{OPEN_TIMEOFDAY_UTC}}",
-        convert_timeofday_to_string(open_timeofday_utc)
-    );
-
-    html.replace(
-        "{{OPEN_SUN_CHECKED}}",
-        config_.open_mode == ScheduleMode::SUN_OFFSET
-            ? " checked"
-            : ""
-    );
-
-    html.replace(
-        "{{OPEN_SUN_OFFSET}}",
-        String(config_.open_sun_offset)
-    );
+    html.replace( "{{OPEN_SUN_OFFSET}}", String(config_.open_sun_offset) );
 
     const int close_timeofday_local =
 		convert_time_to_timeofday
@@ -339,61 +249,29 @@ String WebPortal::buildIndexHtml()
 			)
         );
 
-    html.replace(
-        "{{CLOSE_TIMEOFDAY_CHECKED}}",
-        config_.close_mode == ScheduleMode::TIME_OF_DAY
+    html.replace( "{{CLOSE_TIMEOFDAY_CHECKED}}", config_.close_mode == ScheduleMode::TIME_OF_DAY
+                                            ? " checked"
+                                            : ""
+    );
+
+    html.replace( "{{CLOSE_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(close_timeofday_local) );
+    const int close_timeofday_utc = config_.close_timeofday_utc;
+    html.replace( "{{CLOSE_TIMEOFDAY_UTC}}", convert_timeofday_to_string(close_timeofday_utc) );
+    html.replace( "{{CLOSE_SUN_CHECKED}}", config_.close_mode == ScheduleMode::SUN_OFFSET
             ? " checked"
             : ""
     );
-
-    html.replace(
-        "{{CLOSE_TIMEOFDAY_LOCAL}}",
-        convert_timeofday_to_string(close_timeofday_local)
-    );
-
-    const int close_timeofday_utc =
-        config_.close_timeofday_utc;
-
-    html.replace(
-        "{{CLOSE_TIMEOFDAY_UTC}}",
-        convert_timeofday_to_string(close_timeofday_utc)
-    );
-
-    html.replace(
-        "{{CLOSE_SUN_CHECKED}}",
-        config_.close_mode == ScheduleMode::SUN_OFFSET
-            ? " checked"
-            : ""
-    );
-
-    html.replace(
-        "{{CLOSE_SUN_OFFSET}}",
-        String(config_.close_sun_offset)
-    );
-
-    html.replace(
-        "{{MOTOR_OPEN_DURATION_MS}}",
-        String(config_.motor_open_duration_ms)
-    );
-
-    html.replace(
-        "{{MOTOR_CLOSE_DURATION_MS}}",
-        String(config_.motor_close_duration_ms)
-    );
-
-    html.replace(
-        "{{MOTOR_MAX_RUN_MS}}",
-        String(
+    html.replace( "{{CLOSE_SUN_OFFSET}}", String(config_.close_sun_offset) );
+    html.replace( "{{MOTOR_OPEN_DURATION_MS}}", String(config_.motor_open_duration_ms) );
+    html.replace( "{{MOTOR_CLOSE_DURATION_MS}}", String(config_.motor_close_duration_ms));
+    html.replace( "{{MOTOR_MAX_RUN_MS}}", String(
             max(
                 config_.motor_open_duration_ms,
                 config_.motor_close_duration_ms
             )
         )
     );
-
-    html.replace(
-        "{{MOTOR_INVERT_DIRECTION_CHECKED}}",
-        config_.motor_invert_direction
+    html.replace( "{{MOTOR_INVERT_DIRECTION_CHECKED}}", config_.motor_invert_direction
             ? " checked"
             : ""
     );
@@ -401,21 +279,13 @@ String WebPortal::buildIndexHtml()
     // No event-history storage is currently exposed by WebPortal.
     html.replace("{{LAST_EVENT}}", "");
 
-#ifdef DEBUG_TRACES
+#   ifdef DEBUG_TRACES
     String debug_section(kDebugLogSectionTemplate);
-
-    debug_section.replace(
-        "{{DEBUG_LOG}}",
-        html_escape_trace_log(TraceLog::snapshot())
-    );
-
-    html.replace(
-        "{{DEBUG_LOG_SECTION}}",
-        debug_section
-    );
-#else
+    debug_section.replace( "{{DEBUG_LOG}}", html_escape_trace_log(TraceLog::snapshot()) );
+    html.replace( "{{DEBUG_LOG_SECTION}}", debug_section );
+#   else
     html.replace("{{DEBUG_LOG_SECTION}}", "");
-#endif
+#   endif
 
     return html;
 }
@@ -584,25 +454,18 @@ void WebPortal::handleSaveConfig()
 
     next.configured = true;
     if (!ConfigStore::save(next)) {
-        TRACE(
-            "[WebPortal] POST /save: failed to persist settings"
-        );
-
-        server_.send(
-            500,
-            "text/plain",
-            "Failed to save settings."
-        );
-
+        TRACE("[WebPortal] POST /save: failed to persist settings");
+        server_.send( 500, "text/plain", "Failed to save settings." );
         return;
     }
 
-    TRACE("[WebPortal] Config before modifcation");
-    ConfigStore::print(config_);
     config_ = next;
     TRACE("[WebPortal] Config after modifcation");
-    ConfigStore::print(config_);
-
+    //ConfigStore::print(config_);
+    ConfigStore::save(config_);
+    config_ = ConfigStore::load();
+    TRACE("[WebPortal] Config after reload");
+    //ConfigStore::print(config_);
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }
