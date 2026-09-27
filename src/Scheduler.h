@@ -7,12 +7,14 @@
 
 #include "Config.h"
 
+
 class Scheduler {
 public:
     enum class ActionType : uint8_t {
         DoorOpen,
         DoorClose,
-        WifiService
+        WifiService,
+        NONE
     };
 
     struct Action {
@@ -31,15 +33,13 @@ public:
     bool update_schedule(const Config& config, const DateTime& now);
 
     bool addAction(const Action& action);
-    bool popDueAction(const DateTime& now, Action& action);
+    Action popFirstDueAction(const DateTime& now);
 
     const Action* nextAction() const;
-
+    const Action* get(size_t index) const;
     bool empty() const;
     size_t count() const;
     void clear();
-
-    void print() const;
 
 private:
     static constexpr const char* NAMESPACE = "scheduler";
@@ -51,3 +51,9 @@ private:
 
     void sort();
 };
+
+const char* actionTypeName(Scheduler::ActionType type);
+
+String action_to_string(const Scheduler::Action& action);
+
+String scheduler_to_string(const Scheduler& scheduler);

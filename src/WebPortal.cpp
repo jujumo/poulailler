@@ -36,10 +36,8 @@ String html_escape_trace_log(const String& input)
 {
     String output;
     output.reserve(input.length());
-
     for (size_t i = 0; i < input.length(); i++) {
         const char c = input[i];
-
         if (c == '&') {
             output += "&amp;";
         } else if (c == '<') {
@@ -50,7 +48,6 @@ String html_escape_trace_log(const String& input)
             output += c;
         }
     }
-
     return output;
 }
 
@@ -58,15 +55,20 @@ String html_escape_trace_log(const String& input)
 
 }  // namespace
 
-WebPortal::WebPortal(Config& config, SleepManager& sleep_manager)
+WebPortal::WebPortal(
+    Config& config,
+    SleepManager& sleep_manager,
+    Scheduler& scheduler
+)
     : config_(config),
       sleep_manager_(sleep_manager),
+      scheduler_(scheduler),
       server_(80),
       httpsStub_(443)
 {
 }
 
-WebPortalRequest WebPortal::run(unsigned long duration_ms)
+void WebPortal::run(unsigned long duration_ms)
 {
     WiFi.onEvent(
         [](arduino_event_id_t event, arduino_event_info_t info) {
@@ -99,7 +101,6 @@ WebPortalRequest WebPortal::run(unsigned long duration_ms)
     while (
         millis() - start < duration_ms
         && !stopRequested_
-        && request_ == WebPortalRequest::NONE
     ) {
         dnsServer_.processNextRequest();
         if (httpsStub_.hasClient()) {
@@ -119,13 +120,20 @@ WebPortalRequest WebPortal::run(unsigned long duration_ms)
     WiFi.mode(WIFI_OFF);
     TRACE("[WebPortal] returning request");
     Serial.flush();
-    return request_;
 }
 
 void WebPortal::setupRoutes()
 {
     server_.on("/", HTTP_GET, [this]() {
         handleRoot();
+    });
+
+    server_.on("/reset", HTTP_POST, [this]() {
+        handleResetScheduler();
+    });
+
+    server_.on("/update", HTTP_POST, [this]() {
+        handleUpdateScheduler();
     });
 
     server_.on("/save", HTTP_POST, [this]() {
@@ -175,8 +183,11 @@ void WebPortal::redirectToRoot()
 String WebPortal::buildIndexHtml()
 {
     String html(kIndexPageTemplate);
-
     String status_block;
+    const DateTime now_utc = sleep_manager_.now();
+    const DateTime now_local = convert_utc_to_local(now_utc, config_.utc_offset);
+    const float lat = config_.latitude;
+    const float lon = config_.longitude;
 
     if (statusMessage_.length() > 0) {
         status_block = "<p class='msg'>" + statusMessage_ + "</p>";
@@ -185,9 +196,6 @@ String WebPortal::buildIndexHtml()
 
     html.replace("{{STATUS_BLOCK}}", status_block);
     html.replace( "{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__ );
-
-    const DateTime now_utc = sleep_manager_.now();
-    const DateTime now_local = convert_utc_to_local(now_utc, config_.utc_offset);
 
     char utc_offset_str[16];
     snprintf(utc_offset_str, sizeof(utc_offset_str), "%g", static_cast<double>(config_.utc_offset));
@@ -200,16 +208,16 @@ String WebPortal::buildIndexHtml()
               "the device can sleep or schedule the door.</p>"
     );
 
-    html.replace( "{{LATITUDE}}", String(config_.latitude, 4) );
-    html.replace( "{{LONGITUDE}}", String(config_.longitude, 4) );
+    html.replace( "{{LATITUDE}}", String(lat, 4) );
+    html.replace( "{{LONGITUDE}}", String(lon, 4) );
 
-    const DateTime sunrise_utc = compute_sunrise_for_today( config_.latitude, config_.longitude, now_utc );
+    const DateTime sunrise_utc = compute_sunrise_for_today( lat, lon, now_utc );
     const DateTime sunrise_local = convert_utc_to_local( sunrise_utc, config_.utc_offset );
 
     html.replace( "{{SUNRISE_LOCAL}}", convert_time_to_string(sunrise_local) );
     html.replace( "{{SUNRISE_UTC}}", convert_time_to_string(sunrise_utc));
 
-    const DateTime sunset_utc = compute_sunset_for_today( config_.latitude, config_.longitude, now_utc);
+    const DateTime sunset_utc = compute_sunset_for_today( lat, lon, now_utc);
     const DateTime sunset_local = convert_utc_to_local( sunset_utc, config_.utc_offset );
 
     html.replace( "{{SUNSET_LOCAL}}", convert_time_to_string(sunset_local));
@@ -277,7 +285,19 @@ String WebPortal::buildIndexHtml()
     );
 
     // No event-history storage is currently exposed by WebPortal.
-    html.replace("{{LAST_EVENT}}", "");
+    String schedule_str;
+
+    if (scheduler_.count() == 0) {
+        schedule_str = "No scheduled actions !";
+    } else {
+        schedule_str += "<ol>\n";
+        for (int i =0 ; i<scheduler_.count() ; ++i) {
+            const Scheduler::Action* action_ptr = scheduler_.get(i);
+            schedule_str += String("<li>") + action_to_string(*action_ptr) + String ("</li>");
+        }
+        schedule_str += "</ol>\n";
+    }
+    html.replace("{{SCHEDULED_EVENTS}}", schedule_str.c_str());
 
 #   ifdef DEBUG_TRACES
     String debug_section(kDebugLogSectionTemplate);
@@ -293,12 +313,23 @@ String WebPortal::buildIndexHtml()
 void WebPortal::handleRoot()
 {
     TRACE("[WebPortal] serving index page");
-
-    server_.send(
-        200,
-        "text/html",
-        buildIndexHtml()
+    server_.send( 200, "text/html", buildIndexHtml()
     );
+}
+
+
+void WebPortal::handleResetScheduler()
+{
+    TRACE("[WebPortal] reset scheduler");
+    scheduler_.clear();
+    redirectToRoot();
+}
+
+void WebPortal::handleUpdateScheduler()
+{
+    TRACE("[WebPortal] update scheduler");
+    scheduler_.update_schedule(config_, sleep_manager_.now());
+    redirectToRoot();
 }
 
 void WebPortal::handleSaveConfig()
@@ -504,41 +535,22 @@ void WebPortal::handleSetTime()
         || minute < 0 || minute > 59
         || second < 0 || second > 59
     ) {
-        server_.send(
-            400,
-            "text/plain",
-            "Invalid date/time."
-        );
+        server_.send( 400, "text/plain", "Invalid date/time.");
 
         return;
     }
 
     // The browser sends UTC and the RTC stores UTC.
-    const DateTime utc(
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second
-    );
+    const DateTime utc( year, month, day, hour, minute, second );
 
 #ifdef DEBUG_TRACES
     TRACEF(
         "[Time] browser UTC=%04d-%02d-%02d %02d:%02d:%02d "
         "-> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d",
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        utc.year(),
-        utc.month(),
-        utc.day(),
-        utc.hour(),
-        utc.minute(),
-        utc.second()
+        year, month, day,
+        hour, minute, second,
+        utc.year(), utc.month(), utc.day(),
+        utc.hour(), utc.minute(), utc.second()
     );
 #endif
 
@@ -550,12 +562,8 @@ void WebPortal::handleSetTime()
     TRACEF(
         "[Time] RTC read-back=%04d-%02d-%02d %02d:%02d:%02d "
         "valid=%d",
-        read_back.year(),
-        read_back.month(),
-        read_back.day(),
-        read_back.hour(),
-        read_back.minute(),
-        read_back.second(),
+        read_back.year(), read_back.month(), read_back.day(),
+        read_back.hour(), read_back.minute(), read_back.second(),
         sleep_manager_.isTimeValid()
     );
 #endif
@@ -566,102 +574,82 @@ void WebPortal::handleSetTime()
 
 void WebPortal::handlePing()
 {
-    server_.send(
-        200,
-        "text/plain",
-        "OK"
-    );
+    server_.send( 200, "text/plain", "OK");
 }
 
 void WebPortal::handleForceOpen()
 {
+    TRACE("[WebPortal] open requested");
     if (!sleep_manager_.isTimeValid()) {
-        server_.send(
-            409,
-            "text/plain",
-            "RTC invalid - sync the time before "
-            "requesting a door action."
-        );
-
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
 
-    TRACE("[WebPortal] open requested");
+    Scheduler::Action door_action;
+    door_action.timestamp = sleep_manager_.now();
+    door_action.type = Scheduler::ActionType::DoorOpen;
+    scheduler_.addAction(door_action);
+    TRACE("[WebPortal] open door action added.");
 
-    request_ = WebPortalRequest::FORCE_OPEN;
+    Scheduler::Action wifi_action;
+    wifi_action.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, 2);
+    wifi_action.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifi_action);
+    TRACE("[Main::web] WiFi action added");
 
-    server_.send(
-        200,
-        "text/plain",
-        "Waking in 2 seconds to open the door."
-    );
+    //server_.send( 200, "text/plain", "Waking in 2 seconds to open the door.");
+    //stopRequested_ = true;
+    redirectToRoot();
 }
 
 void WebPortal::handleForceClose()
 {
+    TRACE("[WebPortal] close requested");
     if (!sleep_manager_.isTimeValid()) {
-        server_.send(
-            409,
-            "text/plain",
-            "RTC invalid - sync the time before "
-            "requesting a door action."
-        );
-
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
 
-    TRACE("[WebPortal] close requested");
+    Scheduler::Action door_action;
+    door_action.timestamp = sleep_manager_.now();
+    door_action.type = Scheduler::ActionType::DoorClose;
+    scheduler_.addAction(door_action);
+    TRACE("[WebPortal] close door action added.");
 
-    request_ = WebPortalRequest::FORCE_CLOSE;
+    Scheduler::Action wifi_action;
+    wifi_action.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, 2);
+    wifi_action.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifi_action);
+    TRACE("[Main::web] WiFi action added");
 
-    server_.send(
-        200,
-        "text/plain",
-        "Waking in 2 seconds to close the door."
-    );
+    //server_.send( 200, "text/plain", "Waking in 2 seconds to close the door.");
+    //stopRequested_ = true;
+    redirectToRoot();
 }
 
 
 void WebPortal::handleSleepNow()
 {
     TRACE("[WebPortal] manual sleep requested");
-
-    TRACE("[WebPortal] before send");
-
-    server_.send(
-        200,
-        "text/plain",
-        "Going to sleep now."
-    );
-
-    TRACE("[WebPortal] after send");
-
+    server_.send( 200, "text/plain", "Going to sleep now." );
     stopRequested_ = true;
-
-    TRACE("[WebPortal] stop requested");
 }
 
 void WebPortal::handleNapNow()
 {
+    TRACE("[WebPortal] manual nap requested");
     if (!sleep_manager_.isTimeValid()) {
-        server_.send(
-            409,
-            "text/plain",
-            "RTC invalid - sync the time before "
-            "requesting a door action."
-        );
-
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
 
-    Serial.println("[WebPortal] manual nap-and-open requested");
-    TRACE("[WebPortal] manual nap-and-open requested");
-
-    request_ = WebPortalRequest::NAP;
-
-    server_.send(
-        200,
-        "text/plain",
-        "Napping for 1 second, then opening."
-    );
+    const uint8_t NAP_TIME_SEC = 20;
+    Scheduler::Action wifiAction;
+    wifiAction.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, NAP_TIME_SEC);
+    wifiAction.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifiAction);
+    TRACE("[WebPortal] WiFi action added");
+    server_.send( 200, "text/plain", "Napping for 20 seconds, then opening." );
+    stopRequested_ = true;
+    //redirectToRoot();
 }

@@ -10,21 +10,23 @@ consumes it.
 ```mermaid
 flowchart TD
     
-  A[setup starts] --> B[Load config and scheduler,
-  Init RTC, door ctrl.]
-  B --> C{awakening from sleep}
-  C -->|yes| D{Due action is door}
-  D -->|yes| F[actuate door]
+  INIT[setup starts] --> 
+  LOAD[Init and load.] -->
+  CAUSE{awakening cause}
+  CAUSE -->|SLEEP| POP[Action = pop due action] --> ACTION
+  CAUSE -->|POWER ON| RESET[reset schedule]
+  RESET --> ADD_ACTION[Action = wifi] --> ACTION
   
+  ACTION{Action}
+  ACTION -->|wifi| WIFI[run webPortal]  --> WIFI
+  WIFI --> WIFI_UPDATE[update schedule with user actions] --> UPDATE
+  ACTION -->|door| DOOR[actuate door] --> UPDATE
+  ACTION -->|None| UPDATE
   
-  C -->|no| M[serve web config]
-  D -->|no| M
-  M --> N[update schedule with user actions]
-  
-  F --> U[update schedule with automatic door events]
-  N --> U
-  U --> V[set alarm to next schedule event]
-  V --> W[go to sleep]
+  UPDATE[update schedule with door events] --> 
+  SET_ALARM[set alarm to next schedule event] -->
+  GO_SLEEP[go to sleep]
+
 ```
 
 ### Session behavior

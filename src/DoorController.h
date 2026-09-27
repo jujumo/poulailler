@@ -26,3 +26,5 @@ private:
 
     Config& config_;
 };
+
+const char* doorActionName(DoorAction action);

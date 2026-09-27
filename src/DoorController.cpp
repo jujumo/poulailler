@@ -96,3 +96,16 @@ void DoorController::operateDoor(uint32_t durationMs, Direction direction) {
     digitalWrite(PIN_STATUS_LED, HIGH);
 
 }
+
+
+const char* doorActionName(DoorAction action)
+{
+    switch (action) {
+        case DoorAction::OPENED:
+            return "OPENED";
+        case DoorAction::CLOSED:
+            return "CLOSED";
+        default:
+            return "NONE";
+    }
+}

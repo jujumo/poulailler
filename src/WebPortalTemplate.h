@@ -123,56 +123,44 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
     <form method='POST' action='/save'>
         <fieldset>
             <legend>Current RTC time</legend>
-
             {{NOW_SUFFIX}}
-
-            <p>
-                Local time: <strong>{{LOCAL_TIME}}</strong>
-            </p>
-
-            <label>
-                UTC offset
+            <p>UTC time  : {{UTC_TIME}}</p>
+            <p>Local time: <strong>{{LOCAL_TIME}}</strong></p>
+            <label> UTC offset:
                 <input
                     type='number'
                     step='1'
                     name='utc_offset'
                     value='{{UTC_OFFSET}}'>
             </label>
-
-            <p>UTC time: {{UTC_TIME}}</p>
         </fieldset>
 
         <fieldset>
             <legend>Sun ephemeris</legend>
-
             <label>
                 Latitude (-90..90)
-                <input
-                    type='number'
-                    step='0.0001'
-                    name='latitude'
-                    value='{{LATITUDE}}'>
+                <input type='number' step='0.0001' name='latitude' value='{{LATITUDE}}'>
             </label>
 
             <label>
                 Longitude (-180..180)
-                <input
-                    type='number'
-                    step='0.0001'
-                    name='longitude'
-                    value='{{LONGITUDE}}'>
+                <input type='number' step='0.0001' name='longitude' value='{{LONGITUDE}}'>
             </label>
 
             <p>
                 Today's sunrise:
-                <span id='sunrise_local'>{{SUNRISE_LOCAL}}</span>
-                (<span id='sunrise_utc'>{{SUNRISE_UTC}}</span> UTC)
+                <br>
+                local: <strong><span id='sunrise_local'>{{SUNRISE_LOCAL}}</span></strong>
+                <br>
+                UTC: <span id='sunrise_utc'>{{SUNRISE_UTC}}</span>
             </p>
 
             <p>
                 Today's sunset:
-                <span id='sunset_local'>{{SUNSET_LOCAL}}</span>
-                (<span id='sunset_utc'>{{SUNSET_UTC}}</span> UTC)
+                <br>
+                local: <strong><span id='sunset_local'>{{SUNSET_LOCAL}}</span></strong>
+                <br>
+                UTC: <span id='sunset_utc'>{{SUNSET_UTC}}</span>
             </p>
         </fieldset>
 
@@ -187,37 +175,20 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
             </p>
 
             <label>
-                <input
-                    type='radio'
-                    name='open_mode'
-                    value='timeofday'
-                    {{OPEN_TIMEOFDAY_CHECKED}}>
+                <input type='radio' name='open_mode' value='timeofday' {{OPEN_TIMEOFDAY_CHECKED}}>
                 At a fixed time
             </label>
 
-            <input
-                type='time'
-                name='open_timeofday_local'
-                value='{{OPEN_TIMEOFDAY_LOCAL}}'>
+            <input type='time' name='open_timeofday_local' value='{{OPEN_TIMEOFDAY_LOCAL}}'>
 
             <label>
-                <input
-                    type='radio'
-                    name='open_mode'
-                    value='sun'
-                    {{OPEN_SUN_CHECKED}}>
+                <input type='radio' name='open_mode' value='sun' {{OPEN_SUN_CHECKED}}>
                 Relative to sunrise (minutes offset, +/-)
             </label>
 
-            <input
-                type='number'
-                min='-720'
-                max='720'
-                step='1'
-                name='open_sun_offset'
-                value='{{OPEN_SUN_OFFSET}}'>
+            <input type='number' min='-720' max='720' step='1' name='open_sun_offset' value='{{OPEN_SUN_OFFSET}}'>
+            Sunrise local time: <strong><span id='sunrise_local'>{{SUNRISE_LOCAL}}</span></strong>
 
-            <p id='open_preview' class='preview'></p>
         </fieldset>
 
         <fieldset>
@@ -231,37 +202,20 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
             </p>
 
             <label>
-                <input
-                    type='radio'
-                    name='close_mode'
-                    value='timeofday'
-                    {{CLOSE_TIMEOFDAY_CHECKED}}>
+                <input type='radio' name='close_mode' value='timeofday' {{CLOSE_TIMEOFDAY_CHECKED}}>
                 At a fixed time
             </label>
 
-            <input
-                type='time'
-                name='close_timeofday_local'
-                value='{{CLOSE_TIMEOFDAY_LOCAL}}'>
+            <input type='time' name='close_timeofday_local' value='{{CLOSE_TIMEOFDAY_LOCAL}}'>
 
             <label>
-                <input
-                    type='radio'
-                    name='close_mode'
-                    value='sun'
-                    {{CLOSE_SUN_CHECKED}}>
+                <input type='radio' name='close_mode' value='sun' {{CLOSE_SUN_CHECKED}}>
                 Relative to sunset (minutes offset, +/-)
             </label>
 
-            <input
-                type='number'
-                min='-720'
-                max='720'
-                step='1'
-                name='close_sun_offset'
-                value='{{CLOSE_SUN_OFFSET}}'>
+            <input type='number' min='-720' max='720' step='1' name='close_sun_offset' value='{{CLOSE_SUN_OFFSET}}'>
 
-            <p id='close_preview' class='preview'></p>
+            Sunset local time: <strong><span id='sunset_local'>{{SUNSET_LOCAL}}</span></strong>
         </fieldset>
 
         <fieldset>
@@ -269,25 +223,16 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
 
             <label>
                 Open duration, ms
-                <input
-                    type='number'
-                    name='motor_open_duration_ms'
-                    value='{{MOTOR_OPEN_DURATION_MS}}'>
+                <input type='number' name='motor_open_duration_ms' value='{{MOTOR_OPEN_DURATION_MS}}'>
             </label>
 
             <label>
                 Close duration, ms
-                <input
-                    type='number'
-                    name='motor_close_duration_ms'
-                    value='{{MOTOR_CLOSE_DURATION_MS}}'>
+                <input type='number' name='motor_close_duration_ms' value='{{MOTOR_CLOSE_DURATION_MS}}'>
             </label>
 
             <label>
-                <input
-                    type='checkbox'
-                    name='motor_invert_direction'
-                    {{MOTOR_INVERT_DIRECTION_CHECKED}}>
+                <input type='checkbox' name='motor_invert_direction' {{MOTOR_INVERT_DIRECTION_CHECKED}}>
                 Invert direction
             </label>
         </fieldset>
@@ -297,28 +242,31 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
 
     <fieldset class='force'>
         <legend>Debug</legend>
-
+        <form method='POST' action='/reset' style='display:inline'>
+            <button type='submit'>Reset schedule</button>
+        </form>
+        <br>
+        <form method='POST' action='/update' style='display:inline'>
+            <button type='submit'>Update schedule</button>
+        </form>
+        <br>
         <form method='POST' action='/force-open' style='display:inline'>
-            <button type='submit'>Force Open</button>
+            <button type='submit'>Plan open now, then wifi</button>
         </form>
-
+        <br>
         <form method='POST' action='/force-close' style='display:inline'>
-            <button type='submit'>Force Close</button>
+            <button type='submit'>Plan close now, then wifi</button>
         </form>
-
+        <br>
+        <form method='POST' action='/nap' style='display:inline'>
+            <button type='submit'>Nap for 20s</button>
+        </form>
+        <br>
         <form method='POST' action='/sleep' style='display:inline'>
             <button type='submit'>Sleep now</button>
         </form>
 
-        <form method='POST' action='/reset-schedule' style='display:inline'>
-            <button type='submit'>Reset schedule</button>
-        </form>
-
-        <form method='POST' action='/nap' style='display:inline'>
-            <button type='submit'>Nap and open</button>
-        </form>
-
-        <p>Last event: {{LAST_EVENT}}</p>
+        <p>Scheduled events:<hr> {{SCHEDULED_EVENTS}}</p>
     </fieldset>
 
     {{DEBUG_LOG_SECTION}}

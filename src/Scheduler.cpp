@@ -196,7 +196,9 @@ bool Scheduler::update_schedule(const Config& config, const DateTime& now)
     size_t nb_door_actions = 0;
     DateTime last_door_action_timestamp = now;
     // count door action in the future
-    for (size_t i = 0; i < count_; ++i) {
+    // keep the last one, to populate after it.
+    for (size_t i = 0; i < count_; ++i) 
+    {
         const Action& action = actions_[i];
         if (!is_door_action(action)) {
             continue;
@@ -205,10 +207,10 @@ bool Scheduler::update_schedule(const Config& config, const DateTime& now)
         last_door_action_timestamp = action.timestamp;
     }
 
-    TRACEF(
-        "[Scheduler] update_schedule: %u scheduled door action(s)",
-        static_cast<unsigned>(nb_door_actions)
-    );
+    TRACEF( "[Scheduler/update] already %u scheduled door action(s).",
+        static_cast<unsigned>(nb_door_actions) );
+    TRACEF( "[Scheduler/update] last one due : %s.",
+        TimeTools::convert_time_to_string(last_door_action_timestamp).c_str() );
 
     // if 2 door action already planned, no need to add more for now
     if (nb_door_actions >= 2) {
@@ -230,6 +232,8 @@ bool Scheduler::update_schedule(const Config& config, const DateTime& now)
         if (candidate_door_actions[i].timestamp > last_door_action_timestamp)
         { // future
             addAction(candidate_door_actions[i]);
+            TRACEF( "[Scheduler/update] adding : %s.",
+                    TimeTools::convert_time_to_string(candidate_door_actions[i].timestamp).c_str() );
         }
     }
     /////////////////////////////////
@@ -249,27 +253,51 @@ bool Scheduler::addAction(const Action& action)
     return save();
 }
 
-bool Scheduler::popDueAction(const DateTime& now, Action& action)
+/*bool Scheduler::popDueAction(const DateTime& now, Action& action)
 {
     if (count_ == 0) {
         return false;
     }
-
     if (actions_[0].timestamp.unixtime() > now.unixtime()) {
         return false;
     }
-
     // Return and remove the first action.
     action = actions_[0];
-
     for (size_t i = 1; i < count_; ++i) {
         actions_[i - 1] = actions_[i];
     }
-
     --count_;
     save();
-
     return true;
+}*/
+
+static const Scheduler::Action ACTION_NONE(DateTime(), Scheduler::ActionType::NONE);
+
+Scheduler::Action Scheduler::popFirstDueAction(const DateTime& now)
+{
+    const Scheduler::Action* next_action_ptr = this->nextAction();
+    if (next_action_ptr == nullptr) {
+        return ACTION_NONE;
+    }
+
+    if (next_action_ptr->timestamp > now) {
+        // if first action, is in future, return no due action
+        return ACTION_NONE;
+    }
+
+    // action is due, pop it
+    Action due_action = *next_action_ptr;
+#   ifdef DEBUG_TRACES
+    if (&actions_[0] != next_action_ptr) {
+        TRACE("[Scheduler] ERROR: actions not sorted");
+    }
+#   endif
+    // Move all actions one slot ahead (pop).
+    for (size_t i = 1; i < count_; ++i) {
+        actions_[i - 1] = actions_[i];
+    }
+    --count_;
+    return due_action;
 }
 
 const Scheduler::Action* Scheduler::nextAction() const
@@ -277,8 +305,15 @@ const Scheduler::Action* Scheduler::nextAction() const
     if (count_ == 0) {
         return nullptr;
     }
-
     return &actions_[0];
+}
+
+const Scheduler::Action* Scheduler::get(size_t index) const
+{
+        if (index >= count_) {
+        return nullptr;
+    }
+    return &actions_[index];
 }
 
 bool Scheduler::empty() const
@@ -304,11 +339,11 @@ void Scheduler::sort()
         Action current = actions_[i];
         size_t j = i;
 
-        while (
+        while ( 
             j > 0
-            && current.timestamp.unixtime()
-                < actions_[j - 1].timestamp.unixtime()
-        ) {
+            && current.timestamp.unixtime() < actions_[j - 1].timestamp.unixtime()
+        ) 
+        {
             actions_[j] = actions_[j - 1];
             --j;
         }
@@ -317,42 +352,40 @@ void Scheduler::sort()
     }
 }
 
-void Scheduler::print() const
+
+const char* actionTypeName(Scheduler::ActionType type)
 {
-    TRACEF("[Scheduler] %u action(s)", static_cast<unsigned>(count_));
-
-    for (size_t i = 0; i < count_; ++i) {
-        const Action& action = actions_[i];
-
-        const char* type = "UNKNOWN";
-
-        switch (action.type) {
-            case ActionType::DoorOpen:
-                type = "DoorOpen";
-                break;
-
-            case ActionType::DoorClose:
-                type = "DoorClose";
-                break;
-
-            case ActionType::WifiService:
-                type = "WifiService";
-                break;
-        }
-
-        const DateTime& timestamp = action.timestamp;
-
-        TRACEF(
-            "[Scheduler]   #%u %s @ %04d-%02d-%02d %02d:%02d:%02d (unix=%lu)",
-            static_cast<unsigned>(i),
-            type,
-            timestamp.year(),
-            timestamp.month(),
-            timestamp.day(),
-            timestamp.hour(),
-            timestamp.minute(),
-            timestamp.second(),
-            static_cast<unsigned long>(timestamp.unixtime())
-        );
+    switch (type) {
+        case Scheduler::ActionType::DoorOpen:
+            return "DoorOpen";
+        case Scheduler::ActionType::DoorClose:
+            return "DoorClose";
+        case Scheduler::ActionType::WifiService:
+            return "WifiService";
+        case Scheduler::ActionType::NONE:
+            return "None";
+        default:
+            return "UNKNOWN";
     }
+}
+
+String action_to_string(const Scheduler::Action& action)
+{
+    String representation(actionTypeName(action.type));
+    if (action.type != Scheduler::ActionType::NONE) 
+    {
+        representation += String("@") + TimeTools::convert_time_to_string(action.timestamp);
+    }
+    return representation;
+}
+
+String scheduler_to_string(const Scheduler& scheduler)
+{
+    String result("[Scheduler] %u action(s)\n", scheduler.count());
+    for (size_t i = 0; i < scheduler.count(); ++i) {
+        const Scheduler::Action* action_ptr = scheduler.get(i);
+        result += action_to_string(*action_ptr) + String("\n");
+
+    }
+    return result;
 }

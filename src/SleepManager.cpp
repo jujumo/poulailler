@@ -77,26 +77,38 @@ void SleepManager::clearAlarm()
     rtc_.clearAlarm(1);
 }
 
-void SleepManager::sleepUntil(const DateTime& wakeTime)
+void SleepManager::sleepUntil(const DateTime& wake_time)
 {
-    DateTime alarmTime = wakeTime;
-    const DateTime currentTime = rtc_.now();
+    DateTime alarm_time = wake_time;
+    const DateTime near_future_time = rtc_.now() + TimeSpan(0, 0, 0, 3);
 
-    if (alarmTime <= currentTime) {
-        alarmTime = currentTime + TimeSpan(0, 0, 0, 2);
+    // if alarm tim is already in the past, just wake up in few seconds.
+    if (alarm_time <= near_future_time ) {
+        alarm_time = near_future_time ;
     }
 
-    setNextAlarm(alarmTime);
+    setNextAlarm(alarm_time);
 
-    TRACEF("[Sleep] now  =%s", TimeTools::convert_time_to_string(currentTime).c_str());
-    TRACEF("[Sleep] alarm=%s", TimeTools::convert_time_to_string(alarmTime).c_str());
+    TRACEF("[Sleep] now+esp =%s", TimeTools::convert_time_to_string(near_future_time).c_str());
+    TRACEF("[Sleep] alarm   =%s", TimeTools::convert_time_to_string(alarm_time).c_str());
     TRACEF("[Sleep] SWQ before sleep = %d", digitalRead(PIN_RTC_SWQ));
 
     esp_sleep_enable_ext1_wakeup(
         1ULL << PIN_RTC_SWQ,
         ESP_EXT1_WAKEUP_ANY_LOW
     );
-    Serial.flush();
-    //sleep(10);
+    Serial.flush(); sleep(1);
     esp_deep_sleep_start();
+}
+
+const char* wakeCauseName(SleepManager::WakeCause cause)
+{
+    switch (cause) {
+        case SleepManager::WakeCause::POWER_ON:
+            return "POWER_ON";
+        case SleepManager::WakeCause::RTC_ALARM:
+            return "RTC_ALARM";
+        default:
+            return "OTHER";
+    }
 }

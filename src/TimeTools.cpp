@@ -75,9 +75,9 @@ DateTime compute_sunset_for_today(
     const int year = now_utc.year();
     const int month = now_utc.month();
     const int day = now_utc.day();
-    const int minutes_to_evt = location.sunrise(year, month, day, /*isDST=*/false);
+    const int minutes_to_evt = location.sunset(year, month, day, /*isDST=*/false);
 
-    DateTime sunevt_ts(now_utc.year(), now_utc.month(), now_utc.day(),
+    DateTime sunevt_ts(year, month, day,
         minutes_to_evt / 60, minutes_to_evt % 60, 0);
     return sunevt_ts;
 }
@@ -105,9 +105,9 @@ int convert_string_to_timeofday(const String& value)
 String convert_time_to_string(const DateTime& now)
 {
     char buf[50];
-    snprintf(buf, sizeof(buf), "%04d/%02d/%02d-%02d:%02d", 
+    snprintf(buf, sizeof(buf), "%04d/%02d/%02d-%02d:%02d:%02", 
              now.year(), now.month(), now.day(),
-             now.hour(), now.minute()
+             now.hour(), now.minute(), now.second()
         );
     return String(buf);
 }

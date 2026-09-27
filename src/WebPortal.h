@@ -6,24 +6,25 @@
 
 #include "Config.h"
 #include "SleepManager.h"
+#include "Scheduler.h"
 
-enum class WebPortalRequest : uint8_t {
-    NONE,
-    FORCE_OPEN,
-    FORCE_CLOSE,
-    NAP,
-};
+
 
 class WebPortal {
 public:
-    WebPortal(Config& config, SleepManager& sleep_manager);
+    WebPortal( Config& config, 
+               SleepManager& sleep_manager,
+               Scheduler& scheduler
+            );
 
     // Serve the portal for a bounded time.
-    WebPortalRequest run(unsigned long duration_ms);
+    void run(unsigned long duration_ms);
 
 private:
     void setupRoutes();
     void handleRoot();
+    void handleResetScheduler();
+    void handleUpdateScheduler();
     void handleSaveConfig();
     void handleSetTime();
     void handleForceOpen();
@@ -34,13 +35,16 @@ private:
     void redirectToRoot();
 
     String buildIndexHtml();
-
+    
+    // may act directly on config_, if config is changed by user.
     Config& config_;
     SleepManager& sleep_manager_;
+    // may act directly on scheduler_ e.g. if config is changed.
+    Scheduler& scheduler_;
+
     WebServer server_;
     DNSServer dnsServer_;
     WiFiServer httpsStub_;
     String statusMessage_;
-    WebPortalRequest request_ = WebPortalRequest::NONE;
     bool stopRequested_ = false;
 };

@@ -34,3 +34,5 @@ private:
     RTC_DS3231 rtc_;
     WakeCause wake_cause_ = WakeCause::POWER_ON;
 };
+
+const char* wakeCauseName(SleepManager::WakeCause cause);
