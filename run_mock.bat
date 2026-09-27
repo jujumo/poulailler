@@ -1,1 +1,0 @@
-.venv\Scripts\python.exe mock\dev_portal_mock.py
