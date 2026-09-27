@@ -1,58 +1,59 @@
 #pragma once
 
-#include "ConfigStore.h"
-#include "DoorController.h"
-#include "RtcManager.h"
+#include <cstddef>
+#include <cstdint>
 
-// The scheduling "brain": decides what's due right now, and arms the DS3231
-// for the next event before going back to deep sleep.
-namespace Scheduler {
+#include <RTClib.h>
 
-struct SunTimes {
-    int sunriseMinutes = 0;
-    int sunsetMinutes = 0;
-    bool valid = false;
+#include "Config.h"
+
+
+class Scheduler {
+public:
+    enum class ActionType : uint8_t {
+        DoorOpen,
+        DoorClose,
+        WifiService,
+        NONE
+    };
+
+    struct Action {
+        DateTime timestamp;
+        ActionType type;
+    };
+
+    static constexpr size_t MAX_ACTIONS = 10;
+
+    bool load();
+    bool save() const;
+
+    // Rebuild the future door schedule from the current configuration.
+    // Existing future actions are preserved; new scheduled door actions are
+    // only appended after them.
+    bool update_schedule(const Config& config, const DateTime& now);
+
+    bool addAction(const Action& action);
+    Action popFirstDueAction(const DateTime& now);
+
+    const Action* nextAction() const;
+    const Action* get(size_t index) const;
+    bool empty() const;
+    size_t count() const;
+    void clear();
+
+private:
+    static constexpr const char* NAMESPACE = "scheduler";
+    static constexpr const char* KEY_ACTIONS = "actions";
+    static constexpr const char* KEY_COUNT = "count";
+
+    Action actions_[MAX_ACTIONS];
+    size_t count_ = 0;
+
+    void sort();
 };
 
-// Wraps the Dusk2Dawn library and normalizes its output into a well-formed
-// minute-of-day SunTimes; valid=false for polar day/night, where callers
-// must fall back to absolute-time config rather than use the output.
-SunTimes computeSunTimes(const Config& cfg, int year, int month, int day);
+const char* actionTypeName(Scheduler::ActionType type);
 
-// Resolves a configured open/close schedule (absolute or sun-offset) to a
-// UTC minute-of-day for the given UTC calendar day - the same computation
-// `armNextAlarmAndSleep()` uses to schedule the next wake, exposed so
-// WebPortal can show the user what a schedule actually resolves to.
-int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
-                       int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
-                       const char* zoneName);
+String action_to_string(const Scheduler::Action& action);
 
-// Picks cfg's open (isOpen=true) or close (isOpen=false) schedule fields
-// and resolves them via resolveUtcMinutes() above - the one place that
-// dispatch happens, instead of duplicating "cfg.openX : cfg.closeX" at
-// every call site. Used by decideDoorAction()/armNextAlarmAndSleep() below
-// and by WebPortal for display.
-int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
-                            const DateTime& utcDay);
-
-// Returns whether a scheduled wake may actuate. Early wakes are rejected;
-// a short post-target grace absorbs RTC/boot delay.
-bool scheduledAlarmInWindow(int64_t offsetSeconds);
-
-// Computes the soonest of {today's remaining open, today's remaining close,
-// tomorrow's open}, arms DS3231 Alarm1 for that target, and puts the ESP32
-// into deep sleep. Also arms a multi-hour
-// timer wakeup as a safety net in case the RTC alarm is ever missed. Never
-// returns.
-[[noreturn]] void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store);
-
-// Arms a short WiFi-only wake. It is used as the second stage after a door
-// action that requested portal access.
-[[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds = 1);
-
-// Arms a short door-action wake. The next wake performs the operation first;
-// if wifiUp is true, it then schedules a separate WiFi-only wake.
-[[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
-                                     AlarmOperateDoor operation, bool wifiUp);
-
-}  // namespace Scheduler
+String scheduler_to_string(const Scheduler& scheduler);

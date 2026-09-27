@@ -4,10 +4,8 @@
 
 #include "Debug.h"
 #include "Scheduler.h"
-#include "TimeZone.h"
-#include "TimeZones.h"
+#include "TimeTools.h"
 #include "WebPortalTemplate.h"
-#include "config.h"
 
 #ifdef DEBUG_TRACES
 #include "TraceLog.h"
@@ -15,532 +13,643 @@
 
 namespace {
 
+using namespace TimeTools;
+
 constexpr const char* kApSsid = WIFI_AP_SSID;
 constexpr const char* kApPassword = WIFI_AP_PASSWORD;
+
 const IPAddress kApIp(192, 168, 4, 1);
 
-// Parses "HH:MM" into minutes-since-midnight. Returns -1 on malformed input.
-int parseHhMmToMinutes(const String& value) {
-    int colon = value.indexOf(':');
-    if (colon < 1 || colon == value.length() - 1) return -1;
-    int hh = value.substring(0, colon).toInt();
-    int mm = value.substring(colon + 1).toInt();
-    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return -1;
-    return hh * 60 + mm;
+bool in_range(float value, float minimum, float maximum)
+{
+    return value >= minimum && value <= maximum;
 }
 
-String minutesToHhMm(int minutes) {
-    char buf[6];
-    snprintf(buf, sizeof(buf), "%02d:%02d", minutes / 60, minutes % 60);
-    return String(buf);
-}
-
-int utcMinutesToLocalMinutesForDisplay(int utcMinutes, const DateTime& utcNow,
-                                       const char* zoneName) {
-    TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, zoneName);
-    DateTime utcTarget(localNow.dt.year(), localNow.dt.month(), localNow.dt.day(), utcMinutes / 60,
-                       utcMinutes % 60, 0);
-    DateTime localTarget = TimeZone::toLocal(utcTarget, zoneName).dt;
-    return localTarget.hour() * 60 + localTarget.minute();
-}
-
-int localMinutesToUtcMinutesForStorage(int localMinutes, const DateTime& utcNow,
-                                      const char* zoneName) {
-    TimeZone::LocalTime localNow = TimeZone::toLocal(utcNow, zoneName);
-    DateTime localTarget(localNow.dt.year(), localNow.dt.month(), localNow.dt.day(),
-                         localMinutes / 60, localMinutes % 60, 0);
-    DateTime utcTarget = TimeZone::toUtc(localTarget, zoneName);
-    return utcTarget.hour() * 60 + utcTarget.minute();
-}
-
-bool inRange(float v, float lo, float hi) { return v >= lo && v <= hi; }
-
-struct SunEvent {
-    String local;
-    String utc;
-};
-
-// The next occurrence of sunrise/sunset (today's, unless it's already
-// passed, in which case tomorrow's), in both local and UTC time -
-// mirrors the UTC-space rollover in Scheduler::armNextAlarmAndSleep, since
-// computeSunTimes() is UTC-native.
-SunEvent nextSunEvent(const Config& cfg, RtcManager& rtc, bool sunrise) {
-    SunEvent result = {"unknown - sync time first", "unknown - sync time first"};
-    
-    if (!rtc.isTimeValid()) return result;
-
-    DateTime now = rtc.now();  // UTC
-    Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, now.year(), now.month(), now.day());
-    int nowMinutes = now.hour() * 60 + now.minute();
-    int eventMinutesUtc = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
-
-    if (sun.valid && nowMinutes >= eventMinutesUtc) {
-        DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
-        Scheduler::SunTimes sunTomorrow =
-            Scheduler::computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
-        if (sunTomorrow.valid) {
-            sun = sunTomorrow;
-            eventMinutesUtc = sunrise ? sun.sunriseMinutes : sun.sunsetMinutes;
-            now = tomorrow;  // so the DateTime built below lands on the right day
-        }
-    }
-
-    if (!sun.valid) {
-        result.local = "N/A (polar day/night)";
-        result.utc = "N/A (polar day/night)";
-        return result;
-    }
-
-    DateTime eventUtc(now.year(), now.month(), now.day(), eventMinutesUtc / 60,
-                       eventMinutesUtc % 60, 0);
-    DateTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone).dt;
-    result.utc = minutesToHhMm(eventMinutesUtc);
-    result.local = minutesToHhMm(eventLocal.hour() * 60 + eventLocal.minute());
-    return result;
-}
-
-struct ResolvedSchedule {
-    String utc;
-    String local;
-};
-
-// What a configured open/close schedule (absolute or sun-offset) actually
-// resolves to today, in both UTC and local time - the exact same
-// Scheduler::resolveUtcMinutes() computation the schedule decision uses
-// against, so this is never out of sync with what will really happen.
-// Recomputed fresh on every page load using today's date, rather than
-// stored, so it reflects today's DST status rather than a stale snapshot
-// from whenever it was last saved. This is inherently a snapshot of "if
-// saved today" though - the form has no JS to recompute it live as you
-// change the picker before saving.
-ResolvedSchedule resolveScheduleForDisplay(const Config& cfg, RtcManager& rtc, bool isOpen) {
-    if (!rtc.isTimeValid()) return {"unknown - sync time first", "unknown - sync time first"};
-
-    DateTime utcNow = rtc.now();
-    Scheduler::SunTimes sun = Scheduler::computeSunTimes(cfg, utcNow.year(), utcNow.month(), utcNow.day());
-
-    int utcMinutes = Scheduler::resolveScheduleMinutes(cfg, isOpen, sun, utcNow);
-    DateTime utcTarget(utcNow.year(), utcNow.month(), utcNow.day(), utcMinutes / 60,
-                        utcMinutes % 60, 0);
-    DateTime localTarget = TimeZone::toLocal(utcTarget, cfg.timezone).dt;
-
-    ResolvedSchedule result;
-    result.utc = minutesToHhMm(utcMinutes);
-    result.local = minutesToHhMm(localTarget.hour() * 60 + localTarget.minute());
-    return result;
-}
-
-// "Opened at 2026-07-06 22:21:00 local (20:21:00 UTC)" - display-only, the
-// real (DoorController-self-timestamped) operation record, not Scheduler's
-// trigger bookkeeping - see ConfigStore.h's comment on lastOperationAction/
-// lastOperationUnixTime for why this is never used as a gate.
-String formatLastEvent(const Config& cfg) {
-    if (cfg.lastOperationAction == DoorAction::NONE || cfg.lastOperationUnixTime == 0) {
-        return "none yet";
-    }
-    DateTime eventUtc(cfg.lastOperationUnixTime);
-    TimeZone::LocalTime eventLocal = TimeZone::toLocal(eventUtc, cfg.timezone);
-    char buf[80];
-    snprintf(buf, sizeof(buf), "%s at %04d-%02d-%02d %02d:%02d:%02d local (%02d:%02d:%02d UTC)",
-             cfg.lastOperationAction == DoorAction::OPENED ? "Opened" : "Closed",
-             eventLocal.dt.year(), eventLocal.dt.month(), eventLocal.dt.day(),
-             eventLocal.dt.hour(), eventLocal.dt.minute(), eventLocal.dt.second(), eventUtc.hour(),
-             eventUtc.minute(), eventUtc.second());
-    return String(buf);
-}
-
-// Formats a signed UTC offset like "+02:00", with " (DST)" appended when the
-// zone's daylight-saving rule is in effect.
-String formatUtcOffset(int offsetMinutes, bool isDst) {
-    char buf[8];
-    int absMinutes = offsetMinutes < 0 ? -offsetMinutes : offsetMinutes;
-    snprintf(buf, sizeof(buf), "%c%02d:%02d", offsetMinutes < 0 ? '-' : '+', absMinutes / 60,
-             absMinutes % 60);
-    String result(buf);
-    if (isDst) result += " (DST)";
-    return result;
+bool valid_timeofday(int timeofday)
+{
+    return timeofday >= 0 && timeofday < 24 * 60;
 }
 
 #ifdef DEBUG_TRACES
-// The debug log is echoed into a <pre> block; escape it since some traced
-// lines (e.g. POST /save's raw-field dump) contain unescaped user input
-// from the form itself.
-String htmlEscapeTraceLog(const String& in) {
-    String out;
-    out.reserve(in.length());
-    for (size_t i = 0; i < in.length(); i++) {
-        char c = in[i];
-        if (c == '&') out += "&amp;";
-        else if (c == '<') out += "&lt;";
-        else if (c == '>') out += "&gt;";
-        else out += c;
-    }
-    return out;
-}
-#endif
 
-String buildTimezoneOptions(const char* selected) {
-    String options;
-    for (size_t i = 0; i < kTimeZoneCount; i++) {
-        options += "<option value='";
-        options += kTimeZones[i].name;
-        options += "'";
-        if (strcmp(kTimeZones[i].name, selected) == 0) options += " selected";
-        options += ">";
-        options += kTimeZones[i].name;
-        options += "</option>";
+String html_escape_trace_log(const String& input)
+{
+    String output;
+    output.reserve(input.length());
+    for (size_t i = 0; i < input.length(); i++) {
+        const char c = input[i];
+        if (c == '&') {
+            output += "&amp;";
+        } else if (c == '<') {
+            output += "&lt;";
+        } else if (c == '>') {
+            output += "&gt;";
+        } else {
+            output += c;
+        }
     }
-    return options;
+    return output;
 }
+
+#endif
 
 }  // namespace
 
-WebPortal::WebPortal(ConfigStore& store, RtcManager& rtc)
-    : store_(store), rtc_(rtc), server_(80), httpsStub_(443) {}
+WebPortal::WebPortal(
+    Config& config,
+    SleepManager& sleep_manager,
+    Scheduler& scheduler
+)
+    : config_(config),
+      sleep_manager_(sleep_manager),
+      scheduler_(scheduler),
+      server_(80),
+      httpsStub_(443)
+{
+}
 
-WebPortalRequest WebPortal::run(unsigned long durationMs) {
-    cfg_ = store_.load();
-
-    WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) { TRACE("[WiFi] client connected"); },
-                 ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+void WebPortal::run(unsigned long duration_ms)
+{
+    WiFi.onEvent(
+        [](arduino_event_id_t event, arduino_event_info_t info) {
+            TRACE("[WiFi] client connected");
+        },
+        ARDUINO_EVENT_WIFI_AP_STACONNECTED
+    );
 
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid, kApPassword);
+
     TRACEF("[WiFi] AP started: %s", kApSsid);
 
-    // softAP() alone never hands out a DNS server via DHCP (arduino-esp32
-    // only does that inside softAPConfig(), and only when its dns argument
-    // is non-zero) - without this, clients get no DNS server at all and
-    // can't resolve anything, so they never even reach dnsServer_ below.
-    WiFi.softAPConfig(kApIp, kApIp, IPAddress(255, 255, 255, 0));
+    WiFi.softAPConfig(
+        kApIp,
+        kApIp,
+        IPAddress(255, 255, 255, 0)
+    );
 
-    // Answer every DNS query with our own IP so phones/laptops' captive-
-    // portal detection (which resolves a real hostname, e.g.
-    // connectivitycheck.gstatic.com or captive.apple.com) lands on us and
-    // gets redirected to "/" by the onNotFound handler below - that's what
-    // makes the OS auto-open the config page instead of requiring the user
-    // to type the IP manually.
     dnsServer_.start(53, "*", kApIp);
 
-    // Best-effort for Android, which probes connectivity over HTTPS first
-    // (https://www.google.com/generate_204 by default). We can't complete a
-    // real TLS handshake without a certificate the phone would trust, but
-    // accepting the TCP connection and closing it immediately at least
-    // avoids an outright "connection refused" on port 443, which some
-    // Android versions treat as "no internet, don't bother showing a
-    // sign-in prompt" - unverified whether this changes behavior on any
-    // given device.
+    // Best-effort HTTPS stub for captive-portal detection.
     httpsStub_.begin();
 
     setupRoutes();
     server_.begin();
 
-    unsigned long start = millis();
-        while (millis() - start < durationMs && !stopRequested_ &&
-            request_ == WebPortalRequest::NONE) {
+    const unsigned long start = millis();
+
+    while (
+        millis() - start < duration_ms
+        && !stopRequested_
+    ) {
         dnsServer_.processNextRequest();
-        if (httpsStub_.hasClient()) httpsStub_.accept().stop();
+        if (httpsStub_.hasClient()) {
+            httpsStub_.accept().stop();
+        }
+        //TRACE("[WebPortal] before handleClient");
         server_.handleClient();
+        //TRACE("[WebPortal] after handleClient");
         delay(2);
     }
 
+    TRACE("[WebPortal] leaving portal loop");
     httpsStub_.stop();
     server_.stop();
     dnsServer_.stop();
-    WiFi.softAPdisconnect(true);
+    WiFi.softAPdisconnect(false);
     WiFi.mode(WIFI_OFF);
-    return request_;
+    TRACE("[WebPortal] returning request");
+    Serial.flush();
 }
 
-void WebPortal::setupRoutes() {
-    server_.on("/", HTTP_GET, [this]() { handleRoot(); });
-    server_.on("/save", HTTP_POST, [this]() { handleSaveConfig(); });
-    server_.on("/settime", HTTP_POST, [this]() { handleSetTime(); });
-    server_.on("/force-open", HTTP_POST, [this]() { handleForceOpen(); });
-    server_.on("/force-close", HTTP_POST, [this]() { handleForceClose(); });
-    server_.on("/sleep", HTTP_POST, [this]() { handleSleepNow(); });
-    server_.on("/nap", HTTP_POST, [this]() { handleNapNow(); });
-    // Lightweight, no-op endpoint - see the page's heartbeat JS. Its only
-    // purpose is to be fast when the door isn't moving and to hang, like
-    // everything else on this loop, when it is.
-    server_.on("/ping", HTTP_GET, [this]() { handlePing(); });
-    server_.onNotFound([this]() { redirectToRoot(); });
+void WebPortal::setupRoutes()
+{
+    server_.on("/", HTTP_GET, [this]() {
+        handleRoot();
+    });
+
+    server_.on("/reset", HTTP_POST, [this]() {
+        handleResetScheduler();
+    });
+
+    server_.on("/update", HTTP_POST, [this]() {
+        handleUpdateScheduler();
+    });
+
+    server_.on("/save", HTTP_POST, [this]() {
+        handleSaveConfig();
+    });
+
+    server_.on("/settime", HTTP_POST, [this]() {
+        handleSetTime();
+    });
+
+    server_.on("/force-open", HTTP_POST, [this]() {
+        handleForceOpen();
+    });
+
+    server_.on("/force-close", HTTP_POST, [this]() {
+        handleForceClose();
+    });
+
+    server_.on("/sleep", HTTP_POST, [this]() {
+        handleSleepNow();
+    });
+
+    server_.on("/nap", HTTP_POST, [this]() {
+        handleNapNow();
+    });
+
+    server_.on("/ping", HTTP_GET, [this]() {
+        handlePing();
+    });
+
+    server_.onNotFound([this]() {
+        TRACEF(
+            "[WebPortal] route not found: uri=%s method=%d",
+            server_.uri().c_str(),
+            static_cast<int>(server_.method())
+        );
+        redirectToRoot();
+    });
 }
 
-void WebPortal::redirectToRoot() {
+void WebPortal::redirectToRoot()
+{
     server_.sendHeader("Location", "/");
     server_.send(303);
 }
 
-String WebPortal::buildIndexHtml() {
+String WebPortal::buildIndexHtml()
+{
     String html(kIndexPageTemplate);
+    String status_block;
+    const DateTime now_utc = sleep_manager_.now();
+    const DateTime now_local = convert_utc_to_local(now_utc, config_.utc_offset);
+    const float lat = config_.latitude;
+    const float lon = config_.longitude;
 
-    String statusBlock;
     if (statusMessage_.length() > 0) {
-        statusBlock = "<p class='msg'>" + statusMessage_ + "</p>";
+        status_block = "<p class='msg'>" + statusMessage_ + "</p>";
         statusMessage_ = "";
     }
-    html.replace("{{STATUS_BLOCK}}", statusBlock);
-    html.replace("{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__);
 
-    DateTime utcNow = rtc_.now();
-    TimeZone::LocalTime local = TimeZone::toLocal(utcNow, cfg_.timezone);
+    html.replace("{{STATUS_BLOCK}}", status_block);
+    html.replace( "{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__ );
 
-    char utcBuf[32];
-    snprintf(utcBuf, sizeof(utcBuf), "%04d-%02d-%02d %02d:%02d:%02d", utcNow.year(), utcNow.month(),
-             utcNow.day(), utcNow.hour(), utcNow.minute(), utcNow.second());
-    char localBuf[32];
-    snprintf(localBuf, sizeof(localBuf), "%04d-%02d-%02d %02d:%02d:%02d", local.dt.year(),
-             local.dt.month(), local.dt.day(), local.dt.hour(), local.dt.minute(),
-             local.dt.second());
+    char utc_offset_str[16];
+    snprintf(utc_offset_str, sizeof(utc_offset_str), "%g", static_cast<double>(config_.utc_offset));
+    html.replace( "{{UTC_TIME}}", convert_time_to_string(now_utc) );
+    html.replace( "{{LOCAL_TIME}}", convert_time_to_string(now_local) );
+    html.replace( "{{UTC_OFFSET}}", utc_offset_str );
+    html.replace( "{{NOW_SUFFIX}}", sleep_manager_.isTimeValid()
+            ? ""
+            : "<p class='rtc-alert'>RTC INVALID: set the time before "
+              "the device can sleep or schedule the door.</p>"
+    );
 
-    html.replace("{{UTC_TIME}}", utcBuf);
-    html.replace("{{LOCAL_TIME}}", localBuf);
-    html.replace("{{TIMEZONE_NAME}}", cfg_.timezone);
-    html.replace("{{NOW_SUFFIX}}", rtc_.isTimeValid()
-                                      ? ""
-                                      : "<p class='rtc-alert'>RTC INVALID: set the time before the device can sleep or schedule the door.</p>");
+    html.replace( "{{LATITUDE}}", String(lat, 4) );
+    html.replace( "{{LONGITUDE}}", String(lon, 4) );
 
-    html.replace("{{LAT}}", String(cfg_.lat, 4));
-    html.replace("{{LON}}", String(cfg_.lon, 4));
-    html.replace("{{TIMEZONE_OPTIONS}}", buildTimezoneOptions(cfg_.timezone));
+    const DateTime sunrise_utc = compute_sunrise_for_today( lat, lon, now_utc );
+    const DateTime sunrise_local = convert_utc_to_local( sunrise_utc, config_.utc_offset );
 
-    html.replace("{{OPEN_ABS_CHECKED}}", cfg_.openMode == ScheduleMode::ABSOLUTE ? " checked" : "");
-    html.replace("{{OPEN_ABS}}",
-                 minutesToHhMm(utcMinutesToLocalMinutesForDisplay(cfg_.openAbsMinutes, rtc_.now(),
-                                                                 cfg_.timezone)));
-    html.replace("{{OPEN_SUN_CHECKED}}", cfg_.openMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
-    html.replace("{{OPEN_SUN_OFF}}", String(cfg_.openSunOffsetMinutes));
-    SunEvent sunrise = nextSunEvent(cfg_, rtc_, /*sunrise=*/true);
-    html.replace("{{SUNRISE}}", sunrise.local);
-    html.replace("{{SUNRISE_UTC}}", sunrise.utc);
-    ResolvedSchedule openResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
-    html.replace("{{OPEN_UTC}}", openResolved.utc);
-    html.replace("{{OPEN_LOCAL}}", openResolved.local);
+    html.replace( "{{SUNRISE_LOCAL}}", convert_time_to_string(sunrise_local) );
+    html.replace( "{{SUNRISE_UTC}}", convert_time_to_string(sunrise_utc));
 
-    html.replace("{{CLOSE_ABS_CHECKED}}", cfg_.closeMode == ScheduleMode::ABSOLUTE ? " checked" : "");
-    html.replace("{{CLOSE_ABS}}",
-                 minutesToHhMm(utcMinutesToLocalMinutesForDisplay(cfg_.closeAbsMinutes, rtc_.now(),
-                                                                  cfg_.timezone)));
-    html.replace("{{CLOSE_SUN_CHECKED}}", cfg_.closeMode == ScheduleMode::SUN_OFFSET ? " checked" : "");
-    html.replace("{{CLOSE_SUN_OFF}}", String(cfg_.closeSunOffsetMinutes));
-    SunEvent sunset = nextSunEvent(cfg_, rtc_, /*sunrise=*/false);
-    html.replace("{{SUNSET}}", sunset.local);
-    html.replace("{{SUNSET_UTC}}", sunset.utc);
-    ResolvedSchedule closeResolved = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
-    html.replace("{{CLOSE_UTC}}", closeResolved.utc);
-    html.replace("{{CLOSE_LOCAL}}", closeResolved.local);
+    const DateTime sunset_utc = compute_sunset_for_today( lat, lon, now_utc);
+    const DateTime sunset_local = convert_utc_to_local( sunset_utc, config_.utc_offset );
 
-    html.replace("{{MOTOR_OPEN_MS}}", String(cfg_.motorOpenDurationMs));
-    html.replace("{{MOTOR_CLOSE_MS}}", String(cfg_.motorCloseDurationMs));
-    html.replace("{{MOTOR_MAX_RUN_MS}}", String(max(cfg_.motorOpenDurationMs, cfg_.motorCloseDurationMs)));
-    html.replace("{{MOTOR_INVERT_CHECKED}}", cfg_.motorInvertDirection ? "checked" : "");
+    html.replace( "{{SUNSET_LOCAL}}", convert_time_to_string(sunset_local));
+    html.replace( "{{SUNSET_UTC}}", convert_time_to_string(sunset_utc));
 
-    html.replace("{{LAST_EVENT}}", formatLastEvent(cfg_));
+    const int open_timeofday_local =
+		convert_time_to_timeofday
+		(
+			convert_utc_to_local
+			(
+				convert_timeofday_to_time(config_.open_timeofday_utc, now_utc),
+				config_.utc_offset
+			)
+        );
 
-#ifdef DEBUG_TRACES
-    String debugSection(kDebugLogSectionTemplate);
-    debugSection.replace("{{DEBUG_LOG}}", htmlEscapeTraceLog(TraceLog::snapshot()));
-    html.replace("{{DEBUG_LOG_SECTION}}", debugSection);
-#else
+    html.replace( "{{OPEN_TIMEOFDAY_CHECKED}}", config_.open_mode == ScheduleMode::TIME_OF_DAY
+                                                ? " checked"
+                                                : ""
+    );
+    html.replace( "{{OPEN_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(open_timeofday_local) );
+    const int open_timeofday_utc = config_.open_timeofday_utc;
+    html.replace( "{{OPEN_TIMEOFDAY_UTC}}", convert_timeofday_to_string(open_timeofday_utc) );
+    html.replace( "{{OPEN_SUN_CHECKED}}", config_.open_mode == ScheduleMode::SUN_OFFSET
+                                        ? " checked"
+                                        : ""
+    );
+
+    html.replace( "{{OPEN_SUN_OFFSET}}", String(config_.open_sun_offset) );
+
+    const int close_timeofday_local =
+		convert_time_to_timeofday
+		(
+			convert_utc_to_local
+			(
+				convert_timeofday_to_time(config_.close_timeofday_utc, now_utc),
+				config_.utc_offset
+			)
+        );
+
+    html.replace( "{{CLOSE_TIMEOFDAY_CHECKED}}", config_.close_mode == ScheduleMode::TIME_OF_DAY
+                                            ? " checked"
+                                            : ""
+    );
+
+    html.replace( "{{CLOSE_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(close_timeofday_local) );
+    const int close_timeofday_utc = config_.close_timeofday_utc;
+    html.replace( "{{CLOSE_TIMEOFDAY_UTC}}", convert_timeofday_to_string(close_timeofday_utc) );
+    html.replace( "{{CLOSE_SUN_CHECKED}}", config_.close_mode == ScheduleMode::SUN_OFFSET
+            ? " checked"
+            : ""
+    );
+    html.replace( "{{CLOSE_SUN_OFFSET}}", String(config_.close_sun_offset) );
+    html.replace( "{{MOTOR_OPEN_DURATION_MS}}", String(config_.motor_open_duration_ms) );
+    html.replace( "{{MOTOR_CLOSE_DURATION_MS}}", String(config_.motor_close_duration_ms));
+    html.replace( "{{MOTOR_MAX_RUN_MS}}", String(
+            max(
+                config_.motor_open_duration_ms,
+                config_.motor_close_duration_ms
+            )
+        )
+    );
+    html.replace( "{{MOTOR_INVERT_DIRECTION_CHECKED}}", config_.motor_invert_direction
+            ? " checked"
+            : ""
+    );
+
+    // No event-history storage is currently exposed by WebPortal.
+    String schedule_str;
+
+    if (scheduler_.count() == 0) {
+        schedule_str = "No scheduled actions !";
+    } else {
+        schedule_str += "<ol>\n";
+        for (int i =0 ; i<scheduler_.count() ; ++i) {
+            const Scheduler::Action* action_ptr = scheduler_.get(i);
+            schedule_str += String("<li>") + action_to_string(*action_ptr) + String ("</li>");
+        }
+        schedule_str += "</ol>\n";
+    }
+    html.replace("{{SCHEDULED_EVENTS}}", schedule_str.c_str());
+
+#   ifdef DEBUG_TRACES
+    String debug_section(kDebugLogSectionTemplate);
+    debug_section.replace( "{{DEBUG_LOG}}", html_escape_trace_log(TraceLog::snapshot()) );
+    html.replace( "{{DEBUG_LOG_SECTION}}", debug_section );
+#   else
     html.replace("{{DEBUG_LOG_SECTION}}", "");
-#endif
+#   endif
 
     return html;
 }
 
-void WebPortal::handleRoot() {
+void WebPortal::handleRoot()
+{
     TRACE("[WebPortal] serving index page");
-    server_.send(200, "text/html", buildIndexHtml());
+    server_.send( 200, "text/html", buildIndexHtml()
+    );
 }
 
-void WebPortal::handleSaveConfig() {
-    Config next = cfg_;
+
+void WebPortal::handleResetScheduler()
+{
+    TRACE("[WebPortal] reset scheduler");
+    scheduler_.clear();
+    redirectToRoot();
+}
+
+void WebPortal::handleUpdateScheduler()
+{
+    TRACE("[WebPortal] update scheduler");
+    scheduler_.update_schedule(config_, sleep_manager_.now());
+    redirectToRoot();
+}
+
+void WebPortal::handleSaveConfig()
+{
+    Config next = config_;
     bool ok = true;
+	const DateTime now_utc = sleep_manager_.now();
 
-#ifdef DEBUG_TRACES
-    // Raw form fields as received, before any parsing/validation - so a
-    // save that silently does nothing can be told apart from "the request
-    // never reached this handler" vs. "it arrived but got rejected below".
-    TRACEF("[WebPortal] POST /save: openMode=%s openAbs=%s openSunOff=%s closeMode=%s closeAbs=%s "
-           "closeSunOff=%s motorOpenMs=%s motorCloseMs=%s",
-           server_.arg("openMode").c_str(), server_.arg("openAbs").c_str(),
-           server_.arg("openSunOff").c_str(), server_.arg("closeMode").c_str(),
-           server_.arg("closeAbs").c_str(), server_.arg("closeSunOff").c_str(),
-           server_.arg("motorOpenMs").c_str(), server_.arg("motorCloseMs").c_str());
-#endif
+    TRACEF(
+        "[WebPortal] POST /save: "
+        "\n\topen_mode=%s open_timeofday_local=%s open_sun_offset=%s "
+        "\n\tclose_mode=%s close_timeofday_local=%s close_sun_offset=%s "
+        "\n\tmotor_open_duration_ms=%s tmotor_close_duration_ms=%s",
+        server_.arg("open_mode").c_str(),
+        server_.arg("open_timeofday_local").c_str(),
+        server_.arg("open_sun_offset").c_str(),
+        server_.arg("close_mode").c_str(),
+        server_.arg("close_timeofday_local").c_str(),
+        server_.arg("close_sun_offset").c_str(),
+        server_.arg("motor_open_duration_ms").c_str(),
+        server_.arg("motor_close_duration_ms").c_str()
+    );
 
-    if (server_.hasArg("lat")) {
-        float v = server_.arg("lat").toFloat();
-        if (inRange(v, -90.0f, 90.0f)) next.lat = v; else ok = false;
-    }
-    if (server_.hasArg("lon")) {
-        float v = server_.arg("lon").toFloat();
-        if (inRange(v, -180.0f, 180.0f)) next.lon = v; else ok = false;
-    }
-    if (server_.hasArg("timezone")) {
-        String tz = server_.arg("timezone");
-        if (isKnownTimeZoneName(tz.c_str())) {
-            tz.toCharArray(next.timezone, sizeof(next.timezone));
+    if (server_.hasArg("latitude")) {
+        const float value = server_.arg("latitude").toFloat();
+        if (in_range(value, -90.0f, 90.0f)) {
+            next.latitude = value;
         } else {
             ok = false;
         }
     }
 
-    if (server_.hasArg("openMode")) {
-        next.openMode =
-            server_.arg("openMode") == "sun" ? ScheduleMode::SUN_OFFSET : ScheduleMode::ABSOLUTE;
-    }
-    if (server_.hasArg("openAbs")) {
-        int m = parseHhMmToMinutes(server_.arg("openAbs"));
-        if (m >= 0) {
-            DateTime now = rtc_.isTimeValid() ? rtc_.now() : DateTime(2025, 1, 1, 0, 0, 0);
-            next.openAbsMinutes = static_cast<uint16_t>(
-                localMinutesToUtcMinutesForStorage(m, now, next.timezone));
+    if (server_.hasArg("longitude")) {
+        const float value = server_.arg("longitude").toFloat();
+        if (in_range(value, -180.0f, 180.0f)) {
+            next.longitude = value;
         } else {
             ok = false;
         }
     }
-    if (server_.hasArg("openSunOff")) {
-        int v = server_.arg("openSunOff").toInt();
-        if (v >= -720 && v <= 720) next.openSunOffsetMinutes = static_cast<int16_t>(v); else ok = false;
-    }
 
-    if (server_.hasArg("closeMode")) {
-        next.closeMode =
-            server_.arg("closeMode") == "sun" ? ScheduleMode::SUN_OFFSET : ScheduleMode::ABSOLUTE;
-    }
-    if (server_.hasArg("closeAbs")) {
-        int m = parseHhMmToMinutes(server_.arg("closeAbs"));
-        if (m >= 0) {
-            DateTime now = rtc_.isTimeValid() ? rtc_.now() : DateTime(2025, 1, 1, 0, 0, 0);
-            next.closeAbsMinutes = static_cast<uint16_t>(
-                localMinutesToUtcMinutesForStorage(m, now, next.timezone));
+    if (server_.hasArg("utc_offset")) {
+        const float value = server_.arg("utc_offset").toFloat();
+        if (in_range(value, -12.0f, 12.0f)) {
+            next.utc_offset = value;
         } else {
             ok = false;
         }
     }
-    if (server_.hasArg("closeSunOff")) {
-        int v = server_.arg("closeSunOff").toInt();
-        if (v >= -720 && v <= 720) next.closeSunOffsetMinutes = static_cast<int16_t>(v); else ok = false;
+
+    if (server_.hasArg("open_mode")) {
+        next.open_mode = server_.arg("open_mode") == "sun"
+                ? ScheduleMode::SUN_OFFSET
+                : ScheduleMode::TIME_OF_DAY;
     }
 
-    if (server_.hasArg("motorOpenMs")) {
-        long v = server_.arg("motorOpenMs").toInt();
-        if (v > 0 && v <= 120000) next.motorOpenDurationMs = static_cast<uint32_t>(v); else ok = false;
-    }
-    if (server_.hasArg("motorCloseMs")) {
-        long v = server_.arg("motorCloseMs").toInt();
-        if (v > 0 && v <= 120000) next.motorCloseDurationMs = static_cast<uint32_t>(v); else ok = false;
+    if (server_.hasArg("open_timeofday_local")) {
+        const int open_timeofday_local = convert_string_to_timeofday(
+                                            server_.arg("open_timeofday_local"));
+        if (valid_timeofday(open_timeofday_local)) 
+        {
+            next.open_timeofday_utc = 
+                convert_time_to_timeofday
+				(
+					convert_local_to_utc
+					(
+						convert_timeofday_to_time(open_timeofday_local, now_utc),
+						next.utc_offset
+					)
+                );
+        } else {
+            ok = false;
+        }
     }
 
-    // A checkbox is only present in the POST when checked - its absence is
-    // the "unchecked" signal, so read it unconditionally rather than gating
-    // on hasArg (which would make it a set-only, never-cleared field).
-    next.motorInvertDirection = server_.hasArg("motorInvertDirection");
+    if (server_.hasArg("open_sun_offset")) {
+        const int value = server_.arg("open_sun_offset").toInt();
+        if (value >= -720 && value <= 720) {
+            next.open_sun_offset = static_cast<int16_t>(value);
+        } else {
+            ok = false;
+        }
+    }
+
+    if (server_.hasArg("close_mode")) {
+        next.close_mode =
+            server_.arg("close_mode") == "sun"
+                ? ScheduleMode::SUN_OFFSET
+                : ScheduleMode::TIME_OF_DAY;
+    }
+
+    if (server_.hasArg("close_timeofday_local")) {
+        const int close_timeofday_local =
+            convert_string_to_timeofday(
+                server_.arg("close_timeofday_local")
+            );
+
+        if (valid_timeofday(close_timeofday_local)) {
+            next.close_timeofday_utc =
+                convert_time_to_timeofday
+				(
+					convert_local_to_utc
+					(
+						convert_timeofday_to_time(close_timeofday_local, now_utc),
+						next.utc_offset
+					)
+                );
+        } else {
+            ok = false;
+        }
+    }
+
+    if (server_.hasArg("close_sun_offset")) {
+        const int value = server_.arg("close_sun_offset").toInt();
+        if (value >= -720 && value <= 720) {
+            next.close_sun_offset = static_cast<int16_t>(value);
+        } else {
+            ok = false;
+        }
+    }
+
+    if (server_.hasArg("motor_open_duration_ms")) {
+        const long value = server_.arg("motor_open_duration_ms").toInt();
+        if (value > 0 && value <= 120000) {
+            next.motor_open_duration_ms = static_cast<uint32_t>(value);
+        } else {
+            ok = false;
+        }
+    }
+
+    if (server_.hasArg("motor_close_duration_ms")) {
+        const long value = server_.arg("motor_close_duration_ms").toInt();
+        if (value > 0 && value <= 120000) {
+            next.motor_close_duration_ms = static_cast<uint32_t>(value);
+        } else {
+            ok = false;
+        }
+    }
+
+    // A checkbox is absent from the POST when unchecked.
+    next.motor_invert_direction = server_.hasArg("motor_invert_direction");
 
     if (!ok) {
-        TRACE("[WebPortal] POST /save: rejected as invalid, nothing saved");
-        server_.send(400, "text/plain", "Invalid input - nothing was saved. Go back and check the values.");
+        TRACE("[WebPortal] ERROR : POST /save: rejected as invalid, nothing saved");
+        server_.send(
+            400,
+            "text/plain",
+            "Invalid input - nothing was saved. "
+            "Go back and check the values."
+        );
         return;
     }
 
     next.configured = true;
-    store_.save(next);
-    cfg_ = next;
+    if (!ConfigStore::save(next)) {
+        TRACE("[WebPortal] POST /save: failed to persist settings");
+        server_.send( 500, "text/plain", "Failed to save settings." );
+        return;
+    }
 
-#ifdef DEBUG_TRACES
-    // Same resolution Scheduler actually schedules against (see
-    // resolveScheduleForDisplay() above) - lets a save be cross-checked
-    // against what the next real wake cycle will do.
-    ResolvedSchedule nextOpen = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/true);
-    ResolvedSchedule nextClose = resolveScheduleForDisplay(cfg_, rtc_, /*isOpen=*/false);
-    TRACEF("[Config] settings saved - next open %s UTC / %s local, next close %s UTC / %s local",
-           nextOpen.utc.c_str(), nextOpen.local.c_str(), nextClose.utc.c_str(), nextClose.local.c_str());
-#endif
-
+    config_ = next;
+    TRACE("[WebPortal] Config after modifcation");
+    //ConfigStore::print(config_);
+    ConfigStore::save(config_);
+    config_ = ConfigStore::load();
+    TRACE("[WebPortal] Config after reload");
+    //ConfigStore::print(config_);
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }
 
-void WebPortal::handleSetTime() {
-    if (!server_.hasArg("y") || !server_.hasArg("mo") || !server_.hasArg("d") ||
-        !server_.hasArg("h") || !server_.hasArg("mi") || !server_.hasArg("s")) {
-        server_.send(400, "text/plain", "Missing time fields.");
+void WebPortal::handleSetTime()
+{
+    if (
+        !server_.hasArg("y")
+        || !server_.hasArg("mo")
+        || !server_.hasArg("d")
+        || !server_.hasArg("h")
+        || !server_.hasArg("mi")
+        || !server_.hasArg("s")
+    ) {
+        server_.send(
+            400,
+            "text/plain",
+            "Missing time fields."
+        );
+
         return;
     }
-    int year = server_.arg("y").toInt();
-    int month = server_.arg("mo").toInt();
-    int day = server_.arg("d").toInt();
-    int hour = server_.arg("h").toInt();
-    int minute = server_.arg("mi").toInt();
-    int second = server_.arg("s").toInt();
 
-    if (year < 2020 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31 ||
-        hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) {
-        server_.send(400, "text/plain", "Invalid date/time.");
+    const int year = server_.arg("y").toInt();
+    const int month = server_.arg("mo").toInt();
+    const int day = server_.arg("d").toInt();
+    const int hour = server_.arg("h").toInt();
+    const int minute = server_.arg("mi").toInt();
+    const int second = server_.arg("s").toInt();
+
+    if (
+        year < 2020 || year > 2099
+        || month < 1 || month > 12
+        || day < 1 || day > 31
+        || hour < 0 || hour > 23
+        || minute < 0 || minute > 59
+        || second < 0 || second > 59
+    ) {
+        server_.send( 400, "text/plain", "Invalid date/time.");
+
         return;
     }
 
-    // The hidden form fields are the browser's UTC clock; the RTC also stores
-    // UTC, so no timezone or DST conversion belongs in this path.
-    DateTime utc(year, month, day, hour, minute, second);
+    // The browser sends UTC and the RTC stores UTC.
+    const DateTime utc( year, month, day, hour, minute, second );
+
 #ifdef DEBUG_TRACES
-    TRACEF("[Time] browser UTC=%04d-%02d-%02d %02d:%02d:%02d -> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d",
-           year, month, day, hour, minute, second, utc.year(), utc.month(), utc.day(), utc.hour(),
-           utc.minute(), utc.second());
+    TRACEF(
+        "[Time] browser UTC=%04d-%02d-%02d %02d:%02d:%02d "
+        "-> RTC UTC=%04d-%02d-%02d %02d:%02d:%02d",
+        year, month, day,
+        hour, minute, second,
+        utc.year(), utc.month(), utc.day(),
+        utc.hour(), utc.minute(), utc.second()
+    );
 #endif
-    rtc_.setTime(utc);
+
+    sleep_manager_.setTime(utc);
+
 #ifdef DEBUG_TRACES
-    DateTime readBack = rtc_.now();
-    TRACEF("[Time] RTC read-back=%04d-%02d-%02d %02d:%02d:%02d valid=%d", readBack.year(),
-           readBack.month(), readBack.day(), readBack.hour(), readBack.minute(), readBack.second(),
-           rtc_.isTimeValid());
+    const DateTime read_back = sleep_manager_.now();
+
+    TRACEF(
+        "[Time] RTC read-back=%04d-%02d-%02d %02d:%02d:%02d "
+        "valid=%d",
+        read_back.year(), read_back.month(), read_back.day(),
+        read_back.hour(), read_back.minute(), read_back.second(),
+        sleep_manager_.isTimeValid()
+    );
 #endif
+
     statusMessage_ = "Time synced from this device.";
     redirectToRoot();
 }
 
-void WebPortal::handlePing() {
-    server_.send(200, "text/plain", "OK");
+void WebPortal::handlePing()
+{
+    server_.send( 200, "text/plain", "OK");
 }
 
-void WebPortal::handleForceOpen() {
-    if (!rtc_.isTimeValid()) {
-        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
-        return;
-    }
+void WebPortal::handleForceOpen()
+{
     TRACE("[WebPortal] open requested");
-    request_ = WebPortalRequest::FORCE_OPEN;
-    server_.send(200, "text/plain", "Waking in 2 seconds to open the door.");
-}
-
-void WebPortal::handleForceClose() {
-    if (!rtc_.isTimeValid()) {
-        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
+    if (!sleep_manager_.isTimeValid()) {
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
+
+    Scheduler::Action door_action;
+    door_action.timestamp = sleep_manager_.now();
+    door_action.type = Scheduler::ActionType::DoorOpen;
+    scheduler_.addAction(door_action);
+    TRACE("[WebPortal] open door action added.");
+
+    Scheduler::Action wifi_action;
+    wifi_action.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, 2);
+    wifi_action.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifi_action);
+    TRACE("[Main::web] WiFi action added");
+
+    //server_.send( 200, "text/plain", "Waking in 2 seconds to open the door.");
+    //stopRequested_ = true;
+    redirectToRoot();
+}
+
+void WebPortal::handleForceClose()
+{
     TRACE("[WebPortal] close requested");
-    request_ = WebPortalRequest::FORCE_CLOSE;
-    server_.send(200, "text/plain", "Waking in 2 seconds to close the door.");
-}
-
-void WebPortal::handleSleepNow() {
-    if (!rtc_.isTimeValid()) {
-        server_.send(409, "text/plain", "RTC invalid - the device will remain awake until time is synced.");
+    if (!sleep_manager_.isTimeValid()) {
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
+
+    Scheduler::Action door_action;
+    door_action.timestamp = sleep_manager_.now();
+    door_action.type = Scheduler::ActionType::DoorClose;
+    scheduler_.addAction(door_action);
+    TRACE("[WebPortal] close door action added.");
+
+    Scheduler::Action wifi_action;
+    wifi_action.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, 2);
+    wifi_action.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifi_action);
+    TRACE("[Main::web] WiFi action added");
+
+    //server_.send( 200, "text/plain", "Waking in 2 seconds to close the door.");
+    //stopRequested_ = true;
+    redirectToRoot();
+}
+
+
+void WebPortal::handleSleepNow()
+{
     TRACE("[WebPortal] manual sleep requested");
+    server_.send( 200, "text/plain", "Going to sleep now." );
     stopRequested_ = true;
-    server_.send(200, "text/plain", "Going to sleep now.");
 }
 
-void WebPortal::handleNapNow() {
-    if (!rtc_.isTimeValid()) {
-        server_.send(409, "text/plain", "RTC invalid - sync the time before requesting a door action.");
+void WebPortal::handleNapNow()
+{
+    TRACE("[WebPortal] manual nap requested");
+    if (!sleep_manager_.isTimeValid()) {
+        server_.send( 409, "text/plain", "RTC invalid - sync the time before " "requesting a door action.");
         return;
     }
-    TRACE("[WebPortal] manual nap-and-open requested");
-    request_ = WebPortalRequest::NAP;
-    server_.send(200, "text/plain", "Napping for 1 second, then opening.");
+
+    const uint8_t NAP_TIME_SEC = 20;
+    Scheduler::Action wifiAction;
+    wifiAction.timestamp = sleep_manager_.now() + TimeSpan(0, 0, 0, NAP_TIME_SEC);
+    wifiAction.type = Scheduler::ActionType::WifiService;
+    scheduler_.addAction(wifiAction);
+    TRACE("[WebPortal] WiFi action added");
+    server_.send( 200, "text/plain", "Napping for 20 seconds, then opening." );
+    stopRequested_ = true;
+    //redirectToRoot();
 }

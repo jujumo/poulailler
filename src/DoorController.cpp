@@ -3,9 +3,10 @@
 #include <Arduino.h>
 
 #include "Debug.h"
-#include "config.h"
 
-DoorController::DoorController(ConfigStore& store, RtcManager& rtc) : store_(store), rtc_(rtc) {}
+
+DoorController::DoorController(Config& config) : config_(config)
+{}
 
 void DoorController::begin() {
     pinMode(PIN_MOTOR_IN1, OUTPUT);
@@ -33,25 +34,23 @@ void DoorController::jitter() {
     digitalWrite(PIN_MOTOR_SLEEP, LOW);
 }
 
-void DoorController::open(Config& cfg) {
-    const Direction direction = cfg.motorInvertDirection ? Direction::CLOSE : Direction::OPEN;
+void DoorController::open() {
+    const Direction direction = config_.motor_invert_direction 
+                              ? Direction::CLOSE
+                              : Direction::OPEN;
     TRACE("[Door] opening");
-    operateDoor(cfg.motorOpenDurationMs, direction);
+    operateDoor(config_.motor_open_duration_ms, direction);
 
-    cfg.lastOperationAction = DoorAction::OPENED;
-    cfg.lastOperationUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
-    store_.save(cfg);
     TRACE("[Door] opened");
 }
 
-void DoorController::close(Config& cfg) {
-    const Direction direction = cfg.motorInvertDirection ? Direction::OPEN : Direction::CLOSE;
+void DoorController::close() {
+   const Direction direction = config_.motor_invert_direction 
+                              ? Direction::CLOSE
+                              : Direction::OPEN;
     TRACE("[Door] closing");
-    operateDoor(cfg.motorCloseDurationMs, direction);
+    operateDoor(config_.motor_close_duration_ms, direction);
 
-    cfg.lastOperationAction = DoorAction::CLOSED;
-    cfg.lastOperationUnixTime = rtc_.isTimeValid() ? rtc_.now().unixtime() : 0;
-    store_.save(cfg);
     TRACE("[Door] closed");
 }
 
@@ -96,4 +95,17 @@ void DoorController::operateDoor(uint32_t durationMs, Direction direction) {
     // Movement done - back to solid on while the motor driver sleeps.
     digitalWrite(PIN_STATUS_LED, HIGH);
 
+}
+
+
+const char* doorActionName(DoorAction action)
+{
+    switch (action) {
+        case DoorAction::OPENED:
+            return "OPENED";
+        case DoorAction::CLOSED:
+            return "CLOSED";
+        default:
+            return "NONE";
+    }
 }

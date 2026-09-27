@@ -1,13 +1,15 @@
 # Poulailler architecture
 
-This firmware is a low-power ESP32-C6 controller for a chicken-coop door. It is intentionally not a continuously running application. It sleeps most of the time, wakes on a scheduled alarm or a service wake, performs one bounded task, and then goes back to deep sleep.
+This firmware is a low-power ESP32-C6 controller for a chicken-coop door.
+It is intentionally not a continuously running application.
+It sleeps most of the time, wakes on a scheduled alarm or a service wake,
+performs one action (door or wifi), and then goes back to deep sleep.
 
 The design priorities are:
 
-- never move the door before the requested time;
-- never run a door action during a WiFi service session;
-- keep all persistent state in NVS or the RTC, not in RAM;
-- always clear the DS3231 alarm before continuing and before sleeping again.
+- low energy consumption (put everything to sleep),
+- simple design, easy to test (1 action per awakening),
+- resilient to power loss (save minimal config in NVS memory).
 
 ## 1. Execution model
 
@@ -18,31 +20,41 @@ The code in `src/main.cpp` is a dispatcher, not a state machine.
 On every boot or wake:
 
 1. `setup()` starts fresh.
-2. It loads configuration from `ConfigStore`.
-3. It initializes the RTC wrapper.
-4. It checks the wake cause and the retained alarm payload.
-5. It then does exactly one of the following:
-   - execute a pending `door_open` / `door_close` action,
-   - serve the WiFi web portal,
-   - or arm the next scheduled event and sleep again.
-6. `loop()` is empty.
+2. Load configuration from `ConfigStore`.
+3. Initialize `SleepManager`.
+4. Load the `Scheduler`.
+5. Determine the wake cause and inspect the first action in the scheduler.
+6. Select exactly one action for this wake:
+   - if the wake cause is `POWER_ON`, serve the WiFi portal;
+   - otherwise, if the first scheduler action is `WifiService`, serve the WiFi portal;
+   - otherwise, if the first scheduler action is a door action and it is due, execute that door action;
+   - otherwise, execute no action.
+7. `Scheduler` updates the schedule.
+8. Ask `SleepManager` to arm the first action in the scheduler and enter deep sleep.
 
-The project depends on this model: RAM is not a durable state container across sleep cycles.
+`loop()` is empty on purpose.
+
+`SleepManager` owns the transition back to deep sleep. `main.cpp` does not
+directly configure the RTC alarm or call the ESP32 deep-sleep API.
 
 ### Why the loop is empty
 
-The ESP32 goes to deep sleep between work windows. A wake is simply a fresh boot with a different reason. Anything that matters between cycles must be stored either in:
+The ESP32 goes to deep sleep between work windows.
+A wake is simply a fresh boot with a different reason.
+Anything that matters between cycles must be stored either in:
 
-- the ESP32 NVS (`ConfigStore`), or
-- the DS3231 RTC and its retained alarm metadata (`RtcManager`).
+- the ESP32 NVS (`Config`) that will survive power loss, or
+- the DS3231 RTC and its retained alarm metadata (`SleepManager`).
 
-That is why all decisions are re-derived on each wake instead of carried forward through a long-lived loop.
+That is why all decisions are re-derived on each wake instead of carried forward
+through a long-lived loop.
 
 ## 2. Safety rules
 
 ### Rule 1: scheduled actions never fire early
 
-The schedule gate is in the wake-dispatch path in `main.cpp`, where the firmware decides whether a scheduled alarm is still valid before issuing the actual door action.
+The schedule gate is in the wake-dispatch path in `main.cpp`, where the firmware
+decides whether a scheduled alarm is still valid before issuing the actual door action.
 
 The target is a UTC minute-of-day, and the comparison is against the current UTC second-of-day. The allowed condition is intentionally asymmetric:
 
@@ -55,8 +67,8 @@ The lower bound is explicitly `0` seconds, so the logic permits a near-boundary 
 This is the main safety check that prevents the door from opening or closing early than requested.
 
 If the RTC wakes before the target, the motor action is skipped and the
-retained target is armed again during the normal sleep transition. The ESP32
-therefore returns to deep sleep instead of waiting awake for the target.
+retained target is armed again during the normal sleep transition.
+The ESP32 therefore returns to deep sleep instead of waiting awake for the target.
 
 ### Rule 2: door actions and WiFi are separate phases
 
@@ -78,44 +90,60 @@ The DS3231 alarm interrupt must be cleared:
 - immediately after waking, before interpreting the wake cause;
 - again immediately before every deep sleep.
 
+`SleepManager` owns both operations.
+
 If either clear is skipped, the open-drain alarm line can remain asserted and the ESP32 wakes again immediately, creating a battery-draining loop.
 
 ## 3. Modules and responsibilities
 
-### ConfigStore
+### Config
 
-`ConfigStore` is the persistence layer. It wraps the ESP32 NVS namespace `doorcfg` and owns the `Config` structure.
+`Config` is the persistence layer. It wraps the ESP32 NVS namespace `doorcfg`
+and owns the `Config` structure.
 
 It persists:
 
 - latitude and longitude,
-- timezone,
+- timezone (utc offset),
 - schedule mode and absolute/sun-offset values,
-- last genuine motor event metadata,
-- scheduler debounce trigger,
-- motor timing configuration.
+- motor timing configuration,
 
 This is the durable source of truth for configuration and state across sleep cycles.
 
-### RtcManager
+### SleepManager
 
-`RtcManager` wraps the DS3231 and stores the time and wake metadata.
+`SleepManager` owns the RTC wake/sleep boundary.
 
 It is responsible for:
 
 - reading the RTC clock,
 - validating that the time is sane,
+- detecting and reporting the wake cause,
+- clearing the DS3231 alarm after wake,
 - setting the next RTC alarm,
-- retaining the wake reason and requested action,
-- clearing the alarm flag.
+- clearing the alarm immediately before sleep,
+- entering ESP32 deep sleep.
 
-The RTC always stores UTC. The firmware converts to local time only when showing the wall-clock value or accepting user input.
+The RTC always stores UTC. The firmware converts to local time only when
+showing the wall-clock value or accepting user input.
 
-### TimeZone and TimeZones
+`main.cpp` should not directly manipulate the DS3231 alarm or enter deep sleep.
 
-The project stores timezone as a named IANA-style zone string, not as a raw UTC offset. Conversion logic lives in `TimeZone` and `TimeZones.h`.
+### TimeTools
 
-This lets the UI and schedule math stay correct across DST transitions without requiring the user to re-save a fresh UTC value every time the offset changes.
+`TimeTools` is responsible for converting, manipulating times.
+
+2 types of time representation:
+
+- `DateTime`: a full timestamp, in a struct provided by RTC lib
+- time of day: a number of minutes since 00:00 stored in integer
+
+Time operations available:
+
+- convert UTC <-> Local
+- compute the time of sunrise/sunset for a given day+position
+- convert DateTime <-> Time of day
+- convert Time (or Time of day) <-> hh:mm string
 
 ### Scheduler
 
@@ -123,19 +151,60 @@ This lets the UI and schedule math stay correct across DST transitions without r
 
 It is responsible for:
 
-- resolving schedule targets in UTC,
+- keeping a sorted list of scheduled actions,
+- updating schedule targets (in UTC),
 - comparing current time to those targets,
 - deciding whether a scheduled action is due,
-- choosing the next alarm to arm,
-- sleeping again after finishing the current cycle.
+- choosing which action should be handled next.
 
 Important design points:
 
-- open and close schedules are resolved through a single dispatch function instead of duplicated logic;
-- a debounce saves the exact trigger minute in `Config::lastTriggerUnixTime`;
-- the debounce is narrower than a �done today� flag: it only suppresses the same scheduled trigger, not the entire day.
+An action is:
 
-This prevents a second poll or reboot from double-firing the same occurrence while still allowing the next real schedule occurrence to trigger normally.
+- a full timestamp. But for "right away" events these timestamps can take abnormal values 1, 2, 3...
+- a type of action: web service or door open or close
+
+Force open is a action scheduled for now.
+
+The list of scheduled actions is sorted by timestamps, in chronological order.
+Meaning, the first action is the next in line.
+
+When execute due action is called, the Scheduler looks for the first action in line,
+and checks if it is time to execute. If the current timestamp is past the action
+timestamp, it is time to execute, and the action is removed from the list.
+If all actions are in the future, do nothing.
+
+Debounce is naturally handled, because the action is popped out of the list.
+The real catch is to make sure past actions are not pushed again in the list.
+This should be taken care of during update.
+
+**Update** takes care of populating the scheduler action list with door actions.
+It should do so following 2 rules:
+
+- make sure there are always at least 2 door actions in line,
+- never add a scheduled door action *before* one already existing. Its the debounce mechanism.
+
+**Forced door actions** will add 2 actions in the list:
+
+- timestamp 1: door action
+- timestamp 2: wifi service
+
+`Scheduler` does not enter deep sleep or manipulate the RTC alarm.
+It only provides the next action and its timestamp to `SleepManager`.
+
+### Sleep transition
+
+`SleepManager` takes the first action in the Scheduler list and looks at its timestamp.
+
+There are 2 cases:
+
+- if the action is already passed (eg. right away door action), set the alarm in 2 seconds;
+- if the action is in the future, set the alarm at this time.
+
+It then clears the alarm and puts the ESP32 into deep sleep.
+
+The details of RTC alarm programming and ESP32 deep-sleep entry belong entirely
+to `SleepManager`.
 
 ### DoorController
 
@@ -143,12 +212,11 @@ This prevents a second poll or reboot from double-firing the same occurrence whi
 
 It is responsible for:
 
-- motor direction selection,
-- timed motor run,
-- motor shutdown,
-- updating the persisted last-operation record.
+- door actuation (timed motor run),
+- motor controller sleep.
 
-It has no scheduling logic and no �already there� check. It simply executes the command it was asked to perform.
+It has no scheduling logic and no "already there" check.
+It simply executes the command it was asked to perform.
 
 The separation is intentional:
 
@@ -162,52 +230,43 @@ The separation is intentional:
 It serves the local web page and supports:
 
 - viewing the schedule,
-- editing settings,
+- editing and saving settings,
 - syncing the RTC from the browser,
-- force-open / force-close requests,
-- immediate sleep for tests,
 - a lightweight ping endpoint used by the UI heartbeat.
 
-It does not trigger the motor directly during the active portal session. Instead, it requests a later wake for the door action. That cleanly separates configuration handling from actuation.
+and debug functions:
+
+- force-open / force-close requests,
+- immediate sleep.
+
+For debugging the actual workflow, it does not trigger the motor directly during the
+active portal session. Instead, it pushes a request for a later wake for the door action.
+That cleanly separates configuration handling from actuation.
 
 ## 4. Data flow
 
 The persistent data model is intentionally small and explicit.
-
-### Last operation vs trigger
-
-There are two distinct fields with different meaning:
-
-- `lastOperationAction` and `lastOperationUnixTime`: the real motor event, recorded after movement happens;
-- `lastTriggerUnixTime`: the schedule debounce key, used to prevent duplicate execution of the same target.
-
-They are related but not interchangeable. The first is historical evidence; the second is a scheduling safety gate.
 
 ## 5. Wake sequencing
 
 A typical cycle looks like this:
 
 1. Boot from deep sleep.
-2. Clear the RTC alarm flag.
-3. Load configuration.
-4. Check if a door-action request is retained.
-5. If yes, perform the door action if still valid.
-6. If no, start or continue the WiFi service session.
-7. Arm the next scheduled door event or the next service wake.
-8. Sleep again.
-
-There is no in-memory session state carried over across cycles.
+2. Check the first pending (past) action:
+	a. If the door action : operate
+	b. If its a wifi: serve until time out or user request
+3. `Scheduler` updates the schedule action list.
+4. `SleepManager` arms the next wake.
+5. `SleepManager` enters deep sleep.
 
 ## 6. Main actuation guard
 
 The critical decision point is the schedule window used before commanding the motor.
 
-In the current implementation, the test is:
+In the current implementation, the current time must be on or after the target time.
 
-- current time must be on or after the target time,
-- and not beyond the small post-target grace window.
-
-This ensures the controller cannot fire early. The door may move at the target or shortly after it, but never before the requested trigger.
+This ensures the controller cannot fire early.
+The door may move at the target, but never before the requested trigger.
 
 That is the safety rule the rest of the architecture depends on.
 
@@ -220,25 +279,31 @@ This is not optional. The firmware must clear the alarm:
 - after wake handling,
 - immediately before each deep sleep.
 
+`SleepManager` owns both operations.
+
 Otherwise the interrupt line can remain asserted and the device re-wakes immediately.
 
 ### All schedule comparison should be in UTC
 
-The hardware clock stores UTC, and the schedule is resolved in UTC before any comparison or action. Local-time values are only used for display and user input.
+The hardware clock stores UTC, and the schedule is resolved in UTC before any comparison or action.
+Local-time values are only used for display and user input.
 
 ### All long-lived state belongs in persistent storage
 
-If a value matters after a sleep, it must be saved to NVS or the RTC. Global RAM is not a valid state boundary for this project.
+If a value matters after a sleep, it must be saved to NVS or the RTC.
+Global RAM is not a valid state boundary for this project.
 
 ## 8. Summary
 
 The project is a deep-sleep battery controller that uses simple, explicit phases:
 
-- `main.cpp` decides what kind of wake this is;
-- `Scheduler` decides whether a scheduled action is due and what to arm next;
+- `main.cpp` dispatches the current wake and coordinates one action;
+- `Scheduler` decides whether a scheduled action is due and what comes next;
+- `SleepManager` owns the RTC alarm and deep-sleep transition;
 - `DoorController` performs the physical movement;
 - `WebPortal` handles configuration and user requests;
-- `ConfigStore` and `RtcManager` preserve the durable state;
+- `ConfigStore` preserves durable configuration;
 - the schedule gate ensures that a door action is never earlier than requested.
 
-This is a deliberately conservative architecture: the device prefers correctness, clear wake boundaries, and explicit state persistence over a richer but riskier state machine.
+This is a deliberately conservative architecture: the device prefers correctness,
+clear wake boundaries, and explicit state persistence over a richer but riskier state machine.

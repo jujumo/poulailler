@@ -9,37 +9,31 @@ consumes it.
 
 ```mermaid
 flowchart TD
-    A[setup starts] --> B[Load config, RTC, and saved flags]
-    B --> C{Door action requested?}
+    
+  INIT[setup starts] --> 
+  LOAD[Init and load.] -->
+  CAUSE{awakening cause}
+  CAUSE -->|SLEEP| POP[Action = pop due action] --> ACTION
+  CAUSE -->|POWER ON| RESET[reset schedule]
+  RESET --> ADD_ACTION[Action = wifi] --> ACTION
+  
+  ACTION{Action}
+  ACTION -->|wifi| WIFI[run webPortal]  --> WIFI
+  WIFI --> WIFI_UPDATE[update schedule with user actions] --> UPDATE
+  ACTION -->|door| DOOR[actuate door] --> UPDATE
+  ACTION -->|None| UPDATE
+  
+  UPDATE[update schedule with door events] --> 
+  SET_ALARM[set alarm to next schedule event] -->
+  GO_SLEEP[go to sleep]
 
-  C -->|Yes| D{WiFi requested?}
-  D -->|Yes| E[Perform immediate open or close action]
-  D -->|No| F[Compare current UTC with retained alarm UTC]
-  F -->|Within +/-2 minutes| G[Perform scheduled open or close action]
-  F -->|Outside window| H[Skip motor action]
-
-  E --> I{WiFi request active?}
-  G --> I
-  H --> I
-
-  C -->|No| J[WiFi request must be active]
-  J --> K[Serve WiFi]
-  K --> L[Consume WiFi request]
-  L --> I
-
-  I -->|Yes| M[Set alarm: now + 2 seconds<br/>Flags: no door action, WiFi active]
-  M --> N[Go to sleep: now + 2 seconds]
-
-  I -->|No| O[Compute next door event]
-  O --> P[Set alarm: next open or close<br/>Retain UTC timestamp and door reason]
-  P --> Q[Go to sleep: next door event]
 ```
 
 ### Session behavior
 
 - **Normal scheduled door action:** retain the resolved UTC trigger timestamp
   when arming the RTC. On `EXT1`, compare the current UTC timestamp with it;
-  perform the action only from the target through the following two minutes.
+  perform the action only at the target time.
   If the wake is early, skip the motor, clear the fired alarm, and re-arm the
   same target before returning to deep sleep. If the wake is more than two
   minutes late, skip the stale action and arm the next door event.
@@ -59,15 +53,6 @@ timestamp. A door operation always runs first without WiFi.
 There is no in-RAM state carried between iterations:
 everything persists through `ConfigStore` (NVS) or the DS3231 (`RtcManager`).
 
-![Normal operation loop sequence diagram](operation-sequence.svg)
-
-Diagram source: [`operation-sequence.mmd`](operation-sequence.mmd) (Mermaid). Regenerate the
-SVG after editing it with:
-
-```
-npx -y @mermaid-js/mermaid-cli -i doc/operation-sequence.mmd -o doc/operation-sequence.svg -b transparent
-```
-
 ## Reading notes
 
 - **`main.cpp` is a dispatcher, not a state machine.** It traces the hardware
@@ -78,8 +63,8 @@ npx -y @mermaid-js/mermaid-cli -i doc/operation-sequence.mmd -o doc/operation-se
   wake, optionally followed by another WiFi wake.
 - **Scheduled movement is timestamp-gated.** `DoorController::open()`/`close()`
   always drives the motor when called. A scheduled `EXT1` wake calls it only
-  when the current UTC timestamp is at or after, and no more than two minutes
-  after, the retained alarm timestamp. An early wake re-arms that same target;
+  when the current UTC timestamp is at or after the retained alarm timestamp. 
+  An early wake re-arms that same target;
   explicit web actions bypass the scheduled check.
 - **Web open/close requests are deferred actions.** The portal closes WiFi and
   arms a one-second wake with `AlarmOperateDoor::door_open` or

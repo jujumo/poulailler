@@ -1,207 +1,391 @@
 #include "Scheduler.h"
 
-#include <Dusk2Dawn.h>
-#include <WiFi.h>
-#include <esp_sleep.h>
+#include <Preferences.h>
 
 #include "Debug.h"
-#include "config.h"  // must come before Arduino.h to override LED_BUILTIN
-#include "TimeZone.h"
+#include "TimeTools.h"
 
 namespace {
 
-// Scheduler selection tolerance: keep an event eligible for a few seconds
-// after its target while the boot that should consume it is starting.
-constexpr int kToleranceAfterSec = 5;
-
-// Scheduled wake validation tolerance. This is deliberately asymmetric:
-// early wakes must wait for the RTC to reach the requested target.
-constexpr int kScheduledAlarmToleranceAfterSec = 120;
-
-// Safety net in case a DS3231 alarm is ever missed/misconfigured.
-constexpr uint64_t kFallbackSleepSeconds = 24ULL * 3600ULL;
-constexpr uint64_t kDebugSleepFallbackSeconds = 60ULL;
-
-int normalizeMinutes(int minutes) {
-    minutes %= 1440;
-    if (minutes < 0) minutes += 1440;
-    return minutes;
+DateTime day_start(const DateTime& timestamp)
+{
+    return DateTime(
+        timestamp.year(),
+        timestamp.month(),
+        timestamp.day(),
+        0,
+        0,
+        0
+    );
 }
 
-[[noreturn]] void goToSleep(uint64_t timerFallbackSeconds, bool enableRtcWakeup) {
-    WiFi.mode(WIFI_OFF);
-    // Turn off LED before going to sleep
-    digitalWrite(PIN_STATUS_LED, LOW);
-    if (enableRtcWakeup) {
-        const esp_sleep_ext1_wakeup_mode_t level_mode = ESP_EXT1_WAKEUP_ANY_LOW;
-        esp_sleep_enable_ext1_wakeup(1ULL << PIN_RTC_SWQ, level_mode);
-        // ESP32-C6 EXT1 takes a GPIO bitmask; DS3231 INT asserts LOW.
-    } else {
-        esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
+Scheduler::Action scheduled_event_for_day(
+    const Config& config,
+    const DateTime& day_utc,
+    bool opening)
+{
+    Scheduler::Action door_action;
+    const DateTime day_midnight(day_utc.year(), day_utc.month(), day_utc.day(), 0, 0, 0);
+    bool closing = !opening;
+    door_action.type = opening ? Scheduler::ActionType::DoorOpen 
+                               : Scheduler::ActionType::DoorClose;
+    // handle time of day envent
+    if (opening && config.open_mode == ScheduleMode::TIME_OF_DAY) 
+    {
+        door_action.timestamp = day_midnight + TimeSpan(config.open_timeofday_utc * 60L);
     }
-    esp_sleep_enable_timer_wakeup(timerFallbackSeconds * 1000000ULL);
-    esp_deep_sleep_start();
-    while (true) {
-    }  // unreachable
+
+    if ( closing && config.close_mode == ScheduleMode::TIME_OF_DAY ) 
+    {
+        door_action.timestamp = day_midnight + TimeSpan(config.close_timeofday_utc * 60L);
+    }
+
+    // handle sun event
+    const float& lat = config.latitude;
+    const float& lon = config.longitude;
+    if (opening && config.open_mode == ScheduleMode::SUN_OFFSET) 
+    {
+        door_action.timestamp = TimeTools::compute_sunrise_for_today(lat, lon, day_midnight) 
+                        + TimeSpan(config.open_sun_offset * 60L);
+    }
+    
+    if (closing && config.close_mode == ScheduleMode::SUN_OFFSET) 
+    {
+        door_action.timestamp = TimeTools::compute_sunset_for_today(lat, lon, day_midnight) 
+                        + TimeSpan(config.close_sun_offset * 60L);
+    }
+
+    return door_action;
 }
 
-}  // namespace
+bool is_door_action(const Scheduler::Action& action)
+{
+    if (
+        action.type != Scheduler::ActionType::DoorOpen
+        && action.type != Scheduler::ActionType::DoorClose
+    ) {
+        return false;
+    }
 
-namespace Scheduler {
+    // DateTime(1), DateTime(2), ... are reserved for immediate/forced actions.
+    return action.timestamp.year() >= 2020;
+}
 
-// Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
-// [0, 1440) for extreme timezone/longitude combinations - normalize here so
-// callers only ever see well-formed minute-of-day values.
-//
-// (year, month, day) is a UTC calendar date, and the result is UTC-native:
-// passing timezone=0/isDST=false makes Dusk2Dawn return its raw UTC minutes
-// (see Dusk2Dawn::sunriseSetUTC()) with no local/DST conversion at all -
-// sunrise/sunset is purely a function of lat/lon/date, so no timezone is
-// needed here once everything downstream works in UTC too.
-SunTimes computeSunTimes(const Config& cfg, int year, int month, int day) {
-    Dusk2Dawn location(cfg.lat, cfg.lon, /*timezone=*/0.0f);
-    int sunrise = location.sunrise(year, month, day, /*isDST=*/false);
-    int sunset = location.sunset(year, month, day, /*isDST=*/false);
+bool same_action(
+    const Scheduler::Action& action,
+    const DateTime& timestamp,
+    Scheduler::ActionType type)
+{
+    return action.timestamp.unixtime() == timestamp.unixtime()
+        && action.type == type;
+}
 
-    SunTimes result;
-    result.valid = (sunrise != -1) && (sunset != -1);
-    if (result.valid) {
-        result.sunriseMinutes = normalizeMinutes(sunrise);
-        result.sunsetMinutes = normalizeMinutes(sunset);
+} // namespace
+
+bool Scheduler::load()
+{
+    Preferences prefs;
+
+    if (!prefs.begin(NAMESPACE, true)) {
+        return false;
+    }
+
+    const size_t stored_count =
+        prefs.getUInt(KEY_COUNT, 0);
+
+    if (stored_count > MAX_ACTIONS) {
+        prefs.end();
+        count_ = 0;
+        return false;
+    }
+
+    count_ = stored_count;
+
+    if (count_ > 0) {
+        const size_t expected_size = sizeof(Action) * count_;
+        const size_t stored_size = prefs.getBytesLength(KEY_ACTIONS);
+
+        if (stored_size != expected_size) {
+            prefs.end();
+            count_ = 0;
+            return false;
+        }
+
+        const size_t read_size =
+            prefs.getBytes(KEY_ACTIONS, actions_, expected_size);
+
+        if (read_size != expected_size) {
+            prefs.end();
+            count_ = 0;
+            return false;
+        }
+    }
+
+    prefs.end();
+    sort();
+
+    TRACEF("[Scheduler] loaded schedule: %u action(s)",
+           static_cast<unsigned>(count_));
+
+    for (size_t i = 0; i < count_; ++i) {
+        const char* type = "UNKNOWN";
+
+        switch (actions_[i].type) {
+            case ActionType::DoorOpen:
+                type = "DoorOpen";
+                break;
+            case ActionType::DoorClose:
+                type = "DoorClose";
+                break;
+            case ActionType::WifiService:
+                type = "WifiService";
+                break;
+        }
+
+        const DateTime& timestamp = actions_[i].timestamp;
+
+        TRACEF(
+            "[Scheduler]   #%u %s @ %04d-%02d-%02d %02d:%02d:%02d (unix=%lu)",
+            static_cast<unsigned>(i),
+            type,
+            timestamp.year(),  timestamp.month(), timestamp.day(),
+            timestamp.hour(), timestamp.minute(), timestamp.second(),
+            static_cast<unsigned long>(timestamp.unixtime())
+        );
+    }
+
+    return true;
+}
+
+bool Scheduler::save() const
+{
+    Preferences prefs;
+
+    if (!prefs.begin(NAMESPACE, false)) {
+        return false;
+    }
+
+    const size_t written_count =
+        prefs.putUInt(KEY_COUNT, static_cast<uint32_t>(count_));
+
+    if (written_count == 0 && count_ != 0) {
+        prefs.end();
+        return false;
+    }
+
+    if (count_ > 0) {
+        const size_t expected_size = sizeof(Action) * count_;
+        const size_t written_size =
+            prefs.putBytes(KEY_ACTIONS, actions_, expected_size);
+
+        if (written_size != expected_size) {
+            prefs.end();
+            return false;
+        }
+    }
+    else {
+        prefs.remove(KEY_ACTIONS);
+    }
+
+    prefs.end();
+    return true;
+}
+
+bool Scheduler::update_schedule(const Config& config, const DateTime& now)
+{
+    size_t nb_door_actions = 0;
+    DateTime last_door_action_timestamp = now;
+    // count door action in the future
+    // keep the last one, to populate after it.
+    for (size_t i = 0; i < count_; ++i) 
+    {
+        const Action& action = actions_[i];
+        if (!is_door_action(action)) {
+            continue;
+        }
+        ++nb_door_actions;
+        last_door_action_timestamp = action.timestamp;
+    }
+
+    TRACEF( "[Scheduler/update] already %u scheduled door action(s).",
+        static_cast<unsigned>(nb_door_actions) );
+    TRACEF( "[Scheduler/update] last one due : %s.",
+        TimeTools::convert_time_to_string(last_door_action_timestamp).c_str() );
+
+    // if 2 door action already planned, no need to add more for now
+    if (nb_door_actions >= 2) {
+        return true;
+    }
+
+    // generates candidates open/close actions, then filter out the ones already passed.
+    // add the remaining to the schedule (even if theire are more than 2).
+    DateTime today(now);
+    Action candidate_door_actions[4];
+    candidate_door_actions[0] = scheduled_event_for_day(config, today, /*opening=*/true);
+    candidate_door_actions[1] = scheduled_event_for_day(config, today, /*opening=*/false);
+    DateTime tomorrow = today + TimeSpan(1, 0, 0, 0);
+    candidate_door_actions[2] = scheduled_event_for_day(config, tomorrow, /*opening=*/true);
+    candidate_door_actions[3] = scheduled_event_for_day(config, tomorrow, /*opening=*/false);
+    for (int i=0; i<4; ++i)  
+    {
+        // only add after last door action timestamp, to avoid adding duplicates
+        if (candidate_door_actions[i].timestamp > last_door_action_timestamp)
+        { // future
+            addAction(candidate_door_actions[i]);
+            TRACEF( "[Scheduler/update] adding : %s.",
+                    TimeTools::convert_time_to_string(candidate_door_actions[i].timestamp).c_str() );
+        }
+    }
+    /////////////////////////////////
+    return save();
+}
+
+bool Scheduler::addAction(const Action& action)
+{
+    if (count_ >= MAX_ACTIONS) {
+        TRACE("cannot add action : schedule is full.");
+        return false;
+    }
+
+    actions_[count_++] = action;
+    sort();
+
+    return save();
+}
+
+/*bool Scheduler::popDueAction(const DateTime& now, Action& action)
+{
+    if (count_ == 0) {
+        return false;
+    }
+    if (actions_[0].timestamp.unixtime() > now.unixtime()) {
+        return false;
+    }
+    // Return and remove the first action.
+    action = actions_[0];
+    for (size_t i = 1; i < count_; ++i) {
+        actions_[i - 1] = actions_[i];
+    }
+    --count_;
+    save();
+    return true;
+}*/
+
+static const Scheduler::Action ACTION_NONE(DateTime(), Scheduler::ActionType::NONE);
+
+Scheduler::Action Scheduler::popFirstDueAction(const DateTime& now)
+{
+    const Scheduler::Action* next_action_ptr = this->nextAction();
+    if (next_action_ptr == nullptr) {
+        return ACTION_NONE;
+    }
+
+    if (next_action_ptr->timestamp > now) {
+        // if first action, is in future, return no due action
+        return ACTION_NONE;
+    }
+
+    // action is due, pop it
+    Action due_action = *next_action_ptr;
+#   ifdef DEBUG_TRACES
+    if (&actions_[0] != next_action_ptr) {
+        TRACE("[Scheduler] ERROR: actions not sorted");
+    }
+#   endif
+    // Move all actions one slot ahead (pop).
+    for (size_t i = 1; i < count_; ++i) {
+        actions_[i - 1] = actions_[i];
+    }
+    --count_;
+    return due_action;
+}
+
+const Scheduler::Action* Scheduler::nextAction() const
+{
+    if (count_ == 0) {
+        return nullptr;
+    }
+    return &actions_[0];
+}
+
+const Scheduler::Action* Scheduler::get(size_t index) const
+{
+        if (index >= count_) {
+        return nullptr;
+    }
+    return &actions_[index];
+}
+
+bool Scheduler::empty() const
+{
+    return count_ == 0;
+}
+
+size_t Scheduler::count() const
+{
+    return count_;
+}
+
+void Scheduler::clear()
+{
+    count_ = 0;
+    save();
+}
+
+void Scheduler::sort()
+{
+    // Insertion sort is sufficient for the small fixed-size action list.
+    for (size_t i = 1; i < count_; ++i) {
+        Action current = actions_[i];
+        size_t j = i;
+
+        while ( 
+            j > 0
+            && current.timestamp.unixtime() < actions_[j - 1].timestamp.unixtime()
+        ) 
+        {
+            actions_[j] = actions_[j - 1];
+            --j;
+        }
+
+        actions_[j] = current;
+    }
+}
+
+
+const char* actionTypeName(Scheduler::ActionType type)
+{
+    switch (type) {
+        case Scheduler::ActionType::DoorOpen:
+            return "DoorOpen";
+        case Scheduler::ActionType::DoorClose:
+            return "DoorClose";
+        case Scheduler::ActionType::WifiService:
+            return "WifiService";
+        case Scheduler::ActionType::NONE:
+            return "None";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+String action_to_string(const Scheduler::Action& action)
+{
+    String representation(actionTypeName(action.type));
+    if (action.type != Scheduler::ActionType::NONE) 
+    {
+        representation += String("@") + TimeTools::convert_time_to_string(action.timestamp);
+    }
+    return representation;
+}
+
+String scheduler_to_string(const Scheduler& scheduler)
+{
+    String result("[Scheduler] %u action(s)\n", scheduler.count());
+    for (size_t i = 0; i < scheduler.count(); ++i) {
+        const Scheduler::Action* action_ptr = scheduler.get(i);
+        result += action_to_string(*action_ptr) + String("\n");
+
     }
     return result;
 }
-
-// Fixed-time schedules are stored in UTC minute-of-day (the RTC stores UTC,
-// and all scheduling math compares against UTC) - local wall-clock values are
-// only used in the web UI and converted to UTC at save time.
-int resolveUtcMinutes(ScheduleMode mode, uint16_t absMinutes, int16_t sunOffsetMinutes,
-                       int sunEventUtcMinutes, bool sunValid, const DateTime& utcDay,
-                       const char* zoneName) {
-    (void)utcDay;
-    (void)zoneName;
-    if (mode == ScheduleMode::SUN_OFFSET && sunValid) {
-        return normalizeMinutes(sunEventUtcMinutes + sunOffsetMinutes);
-    }
-    return normalizeMinutes(absMinutes);
-}
-
-// The one place "open or close?" is dispatched for schedule resolution -
-// decideDoorAction()/armNextAlarmAndSleep() below and WebPortal's display
-// code all go through this instead of duplicating the field picks.
-int resolveScheduleMinutes(const Config& cfg, bool isOpen, const SunTimes& sun,
-                            const DateTime& utcDay) {
-    ScheduleMode mode = isOpen ? cfg.openMode : cfg.closeMode;
-    uint16_t absMinutes = isOpen ? cfg.openAbsMinutes : cfg.closeAbsMinutes;
-    int16_t sunOffsetMinutes = isOpen ? cfg.openSunOffsetMinutes : cfg.closeSunOffsetMinutes;
-    int sunEventUtcMinutes = isOpen ? sun.sunriseMinutes : sun.sunsetMinutes;
-    return resolveUtcMinutes(mode, absMinutes, sunOffsetMinutes, sunEventUtcMinutes, sun.valid,
-                              utcDay, cfg.timezone);
-}
-
-bool scheduledAlarmInWindow(int64_t offsetSeconds) {
-    return offsetSeconds >= 0 && offsetSeconds <= kScheduledAlarmToleranceAfterSec;
-}
-
-void armNextAlarmAndSleep(Config& cfg, RtcManager& rtc, ConfigStore& store) {
-    if (!rtc.isTimeValid()) {
-        // Without a valid RTC there is no meaningful scheduled event to arm.
-        // Keep the session invariant by requesting an immediate WiFi service
-        // wake so the user can set the clock.
-        sleepForWifi(rtc, 1);
-    }
-
-    // Everything here runs in UTC - see decideDoorAction().
-    DateTime now = rtc.now();
-    DateTime tomorrow = now + TimeSpan(1, 0, 0, 0);
-    int nowSeconds = (now.hour() * 60 + now.minute()) * 60 + now.second();
-
-    SunTimes sunToday = computeSunTimes(cfg, now.year(), now.month(), now.day());
-    SunTimes sunTomorrow = computeSunTimes(cfg, tomorrow.year(), tomorrow.month(), tomorrow.day());
-
-    int openTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunToday, now);
-    int closeTodayMin = resolveScheduleMinutes(cfg, /*isOpen=*/false, sunToday, now);
-    int openTomorrowMin = resolveScheduleMinutes(cfg, /*isOpen=*/true, sunTomorrow, tomorrow);
-
-    // DS3231 Alarm1 (match hours/minutes/seconds, ignore date) always fires
-    // at the *next* occurrence of the given time-of-day, so a "today" value
-    // that has already passed simply rolls over to tomorrow in hardware.
-    // That means a today's time-of-day already behind us can't be armed as
-    // "today" - doing so would make the DS3231 roll it to tomorrow and skip
-    // straight past a still-upcoming event later today (e.g. an 08:00 open
-    // already past and an 18:00 close still ahead: naively arming the
-    // earlier clock-time of the two, 08:00, would silently swallow today's
-    // close). This is independent of whether either has already fired -
-    // decideDoorAction() has no memory of that, and neither does this.
-    bool openUpcoming = nowSeconds <= openTodayMin * 60 + kToleranceAfterSec;
-    bool closeUpcoming = nowSeconds <= closeTodayMin * 60 + kToleranceAfterSec;
-
-    int nextMinute;
-    AlarmOperateDoor nextOperation;
-    DateTime nextEventDay;
-    if (openUpcoming && closeUpcoming) {
-        nextMinute = (openTodayMin < closeTodayMin) ? openTodayMin : closeTodayMin;
-        nextOperation = (openTodayMin < closeTodayMin) ? AlarmOperateDoor::door_open
-                                                        : AlarmOperateDoor::door_close;
-        nextEventDay = now;
-    } else if (openUpcoming) {
-        nextMinute = openTodayMin;
-        nextOperation = AlarmOperateDoor::door_open;
-        nextEventDay = now;
-    } else if (closeUpcoming) {
-        nextMinute = closeTodayMin;
-        nextOperation = AlarmOperateDoor::door_close;
-        nextEventDay = now;
-    } else {
-        nextMinute = openTomorrowMin;
-        nextOperation = AlarmOperateDoor::door_open;
-        nextEventDay = tomorrow;
-    }
-
-    DateTime nextEventUtc(nextEventDay.year(), nextEventDay.month(), nextEventDay.day(),
-                           nextMinute / 60, nextMinute % 60, 0);
-
-    // Scheduled alarms carry the selected door operation and no WiFi startup;
-    // wake at the actual target and handle the action directly in setup().
-    DateTime wakeAt = nextEventUtc;
-
-#ifdef DEBUG_TRACES
-    // Runs on every boot right before going back to sleep, so this doubles
-    // as the "what does the device think right now, and when will it next
-    // wake up" boot trace.
-    TimeZone::LocalTime nowLocal = TimeZone::toLocal(now, cfg.timezone);
-    TimeZone::LocalTime nextEventLocal = TimeZone::toLocal(nextEventUtc, cfg.timezone);
-    TRACEF("[Scheduler] RTC now: %04d-%02d-%02d %02d:%02d:%02d UTC / %04d-%02d-%02d %02d:%02d:%02d local",
-           now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(),
-           nowLocal.dt.year(), nowLocal.dt.month(), nowLocal.dt.day(), nowLocal.dt.hour(),
-           nowLocal.dt.minute(), nowLocal.dt.second());
-    TRACEF("[Scheduler] next event: %04d-%02d-%02d %02d:%02d:00 UTC / %04d-%02d-%02d %02d:%02d:00 "
-           "local (openUpcoming=%d closeUpcoming=%d) | waking at %02d:%02d:%02d UTC",
-           nextEventUtc.year(), nextEventUtc.month(), nextEventUtc.day(), nextEventUtc.hour(),
-           nextEventUtc.minute(), nextEventLocal.dt.year(), nextEventLocal.dt.month(),
-           nextEventLocal.dt.day(), nextEventLocal.dt.hour(), nextEventLocal.dt.minute(),
-           openUpcoming, closeUpcoming, wakeAt.hour(), wakeAt.minute(), wakeAt.second());
-#endif
-
-    rtc.setNextAlarm(wakeAt, nextOperation, false);
-    rtc.clearAlarm();
-
-    goToSleep(kFallbackSleepSeconds, true);
-}
-
-[[noreturn]] void sleepForWifi(RtcManager& rtc, uint32_t seconds) {
-    DateTime wakeAt = rtc.now() + TimeSpan(seconds);
-    rtc.setNextAlarm(wakeAt, AlarmOperateDoor::no_door_operation, true);
-    rtc.clearAlarm();
-    goToSleep(kDebugSleepFallbackSeconds, true);
-}
-
-[[noreturn]] void sleepForDoorAction(RtcManager& rtc, uint32_t seconds,
-                                     AlarmOperateDoor operation, bool wifiUp) {
-    DateTime wakeAt = rtc.now() + TimeSpan(seconds);
-    rtc.setNextAlarm(wakeAt, operation, wifiUp);
-    rtc.clearAlarm();
-    goToSleep(kDebugSleepFallbackSeconds, true);
-}
-
-}  // namespace Scheduler
