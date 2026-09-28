@@ -58,11 +58,13 @@ String html_escape_trace_log(const String& input)
 WebPortal::WebPortal(
     Config& config,
     SleepManager& sleep_manager,
-    Scheduler& scheduler
+    Scheduler& scheduler,
+    DoorController& door
 )
     : config_(config),
       sleep_manager_(sleep_manager),
       scheduler_(scheduler),
+      door_(door),
       server_(80),
       httpsStub_(443)
 {
@@ -138,6 +140,18 @@ void WebPortal::setupRoutes()
 
     server_.on("/save", HTTP_POST, [this]() {
         handleSaveConfig();
+    });
+
+    server_.on("/reload", HTTP_POST, [this]() {
+        handleReloadConfig();
+    });
+
+    server_.on("/open", HTTP_POST, [this]() {
+        handleOpen();
+    });
+
+    server_.on("/close", HTTP_POST, [this]() {
+        handleClose();
     });
 
     server_.on("/settime", HTTP_POST, [this]() {
@@ -498,6 +512,27 @@ void WebPortal::handleSaveConfig()
     TRACE("[WebPortal] Config after reload");
     //ConfigStore::print(config_);
     statusMessage_ = "Settings saved.";
+    redirectToRoot();
+}
+
+void WebPortal::handleReloadConfig()
+{
+    TRACE("[Webportal] reload config.");
+    config_ = ConfigStore::load();
+    redirectToRoot();
+}
+
+void WebPortal::handleOpen()
+{
+    TRACE("[Webportal] immaediate open.");
+    door_.open();
+    redirectToRoot();
+}
+
+void WebPortal::handleClose()
+{
+    TRACE("[Webportal] immediate close.");
+    door_.close();
     redirectToRoot();
 }
 

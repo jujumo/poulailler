@@ -105,7 +105,7 @@ int convert_string_to_timeofday(const String& value)
 String convert_time_to_string(const DateTime& now)
 {
     char buf[50];
-    snprintf(buf, sizeof(buf), "%04d/%02d/%02d-%02d:%02d:%02", 
+    snprintf(buf, sizeof(buf), "%04d/%02d/%02d_%02d:%02d:%02d", 
              now.year(), now.month(), now.day(),
              now.hour(), now.minute(), now.second()
         );

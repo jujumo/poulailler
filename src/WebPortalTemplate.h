@@ -236,12 +236,27 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
                 Invert direction
             </label>
         </fieldset>
-
-        <button type='submit'>Save settings</button>
+        <fieldset class='config'>
+            <legend>config</legend>
+            <button type='submit'>Save settings</button>
+        </fieldset>
     </form>
+
+    <fieldset class='door'>
+        <legend>Door</legend>
+        <form method='POST' action='/open' style='display:inline'>
+            <button type='submit'>open</button>
+        </form>
+        <form method='POST' action='/close' style='display:inline'>
+            <button type='submit'>close</button>
+        </form>
+    </fieldset>
 
     <fieldset class='force'>
         <legend>Debug</legend>
+        <form method='POST' action='/reload' style='display:inline'>
+            <button type='submit'>Reload config</button>
+        </form>
         <form method='POST' action='/reset' style='display:inline'>
             <button type='submit'>Reset schedule</button>
         </form>
@@ -314,139 +329,6 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
                 + ':'
                 + (minutes < 10 ? '0' : '') + minutes;
         }
-
-        function render_local_utc_preview(
-            local_value,
-            local_reference,
-            utc_reference
-        ) {
-            if (
-                local_value === null
-                || local_reference === null
-                || utc_reference === null
-            ) {
-                return null;
-            }
-
-            var utc_value =
-                utc_reference + (local_value - local_reference);
-
-            return format_clock(local_value)
-                + ' local ('
-                + format_clock(utc_value)
-                + ' UTC)';
-        }
-
-        function update_preview(
-            mode_name,
-            timeofday_name,
-            offset_name,
-            event_local_id,
-            event_utc_id,
-            preview_id
-        ) {
-            var mode = document.querySelector(
-                "input[name='" + mode_name + "']:checked"
-            );
-            var preview = document.getElementById(preview_id);
-
-            if (!mode) {
-                return;
-            }
-
-            var local_event = parse_clock(
-                document.getElementById(event_local_id).textContent
-            );
-            var utc_event = parse_clock(
-                document.getElementById(event_utc_id).textContent
-            );
-
-            if (local_event === null || utc_event === null) {
-                preview.textContent =
-                    'Preview unavailable: sync time first.';
-                return;
-            }
-
-            if (mode.value === 'timeofday') {
-                var timeofday = document.querySelector(
-                    "input[name='" + timeofday_name + "']"
-                ).value;
-
-                var timeofday_local = parse_clock(timeofday);
-
-                if (timeofday_local === null) {
-                    preview.textContent =
-                        'Preview unavailable: enter a time.';
-                    return;
-                }
-
-                preview.textContent =
-                    'Preview: '
-                    + render_local_utc_preview(
-                        timeofday_local,
-                        local_event,
-                        utc_event
-                    );
-
-                return;
-            }
-
-            var offset_text = document.querySelector(
-                "input[name='" + offset_name + "']"
-            ).value.trim();
-
-            var offset = offset_text === ''
-                ? NaN
-                : Number(offset_text);
-
-            if (!Number.isInteger(offset)) {
-                preview.textContent =
-                    'Preview unavailable: enter a whole-minute offset.';
-                return;
-            }
-
-            preview.textContent =
-                'Preview: '
-                + render_local_utc_preview(
-                    local_event + offset,
-                    local_event,
-                    utc_event
-                );
-        }
-
-        function update_door_previews() {
-            update_preview(
-                'open_mode',
-                'open_timeofday_local',
-                'open_sun_offset',
-                'sunrise_local',
-                'sunrise_utc',
-                'open_preview'
-            );
-
-            update_preview(
-                'close_mode',
-                'close_timeofday_local',
-                'close_sun_offset',
-                'sunset_local',
-                'sunset_utc',
-                'close_preview'
-            );
-        }
-
-        document.querySelectorAll(
-            "input[name='open_mode'],"
-            + " input[name='open_timeofday_local'],"
-            + " input[name='open_sun_offset'],"
-            + " input[name='close_mode'],"
-            + " input[name='close_timeofday_local'],"
-            + " input[name='close_sun_offset']"
-        ).forEach(function(input) {
-            input.addEventListener('input', update_door_previews);
-            input.addEventListener('change', update_door_previews);
-        });
-
-        update_door_previews();
 
         // Heartbeat: an open/close blocks the sketch's loop for the
         // duration of the motor move. A delayed /ping is therefore the

@@ -16,9 +16,10 @@ constexpr unsigned long kConfigPortalDurationMs = 5UL * 60UL * 1000UL;
 void processPortalRequest(
     Config& config,
     SleepManager& sleep_manager,
-    Scheduler& scheduler)
+    Scheduler& scheduler,
+    DoorController& door)
 {
-    WebPortal portal(config, sleep_manager, scheduler);
+    WebPortal portal(config, sleep_manager, scheduler, door);
 
     TRACE("[Main] before portal.run");
     portal.run(kConfigPortalDurationMs);
@@ -129,7 +130,7 @@ void setup()
     {
         TRACE("[main] due WifiService: starting WiFi portal");
         door.jitter();
-        processPortalRequest(config, sleep_manager, scheduler);
+        processPortalRequest(config, sleep_manager, scheduler, door);
     }
     else if (door_action_due) 
     {
