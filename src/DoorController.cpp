@@ -34,28 +34,23 @@ void DoorController::jitter() {
     digitalWrite(PIN_MOTOR_SLEEP, LOW);
 }
 
-void DoorController::open() {
-    const Direction direction = config_.motor_invert_direction 
-                              ? Direction::CLOSE
-                              : Direction::OPEN;
+void DoorController::open() 
+{
     TRACE("[Door] opening");
-    operateDoor(config_.motor_open_duration_ms, direction);
-
+    operateDoor(config_.motor_open_duration_ms, Direction::CLOSE);
     TRACE("[Door] opened");
 }
 
-void DoorController::close() {
-   const Direction direction = config_.motor_invert_direction 
-                              ? Direction::CLOSE
-                              : Direction::OPEN;
+void DoorController::close() 
+{
     TRACE("[Door] closing");
-    operateDoor(config_.motor_close_duration_ms, direction);
-
+    operateDoor(config_.motor_close_duration_ms, Direction::CLOSE);
     TRACE("[Door] closed");
 }
 
-void DoorController::startMoving(Direction direction) {
-    bool openIn1High = direction == Direction::OPEN;
+void DoorController::startMoving(Direction direction) 
+{
+    bool openIn1High = (direction == Direction::OPEN) != config_.motor_invert_direction;
     digitalWrite(PIN_MOTOR_IN1, openIn1High ? HIGH : LOW);
     digitalWrite(PIN_MOTOR_IN2, openIn1High ? LOW : HIGH);
 }
