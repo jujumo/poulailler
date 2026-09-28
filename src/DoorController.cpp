@@ -1,14 +1,13 @@
 #include "DoorController.h"
 
 #include <Arduino.h>
-
 #include "Debug.h"
-
 
 DoorController::DoorController(Config& config) : config_(config)
 {}
 
-void DoorController::begin() {
+void DoorController::begin() 
+{
     pinMode(PIN_MOTOR_IN1, OUTPUT);
     pinMode(PIN_MOTOR_IN2, OUTPUT);
     pinMode(PIN_MOTOR_SLEEP, OUTPUT);
@@ -18,7 +17,8 @@ void DoorController::begin() {
            digitalRead(PIN_MOTOR_IN1), digitalRead(PIN_MOTOR_IN2));
 }
 
-void DoorController::jitter() {
+void DoorController::jitter() 
+{
     constexpr unsigned long kSignalPulseMs = 100;
 
     digitalWrite(PIN_MOTOR_SLEEP, HIGH);
@@ -37,7 +37,7 @@ void DoorController::jitter() {
 void DoorController::open() 
 {
     TRACE("[Door] opening");
-    operateDoor(config_.motor_open_duration_ms, Direction::CLOSE);
+    operateDoor(config_.motor_open_duration_ms, Direction::OPEN);
     TRACE("[Door] opened");
 }
 
@@ -50,18 +50,24 @@ void DoorController::close()
 
 void DoorController::startMoving(Direction direction) 
 {
-    bool openIn1High = (direction == Direction::OPEN) != config_.motor_invert_direction;
+    bool openIn1High = direction == Direction::OPEN;
+    openIn1High = openIn1High != config_.motor_invert_direction;
+    TRACEF("[Door] startMoving dir=%s in1=%s.", 
+        direction == Direction::OPEN ? "OPEN" : "CLOSE",
+        openIn1High ? "True" : "False");
     digitalWrite(PIN_MOTOR_IN1, openIn1High ? HIGH : LOW);
     digitalWrite(PIN_MOTOR_IN2, openIn1High ? LOW : HIGH);
 }
 
-void DoorController::stopMoving() {
+void DoorController::stopMoving()
+{
     digitalWrite(PIN_MOTOR_IN1, LOW);
     digitalWrite(PIN_MOTOR_IN2, LOW);
 }
 
 
-void DoorController::operateDoor(uint32_t durationMs, Direction direction) {
+void DoorController::operateDoor(uint32_t durationMs, Direction direction) 
+{
     // Direction: verify against actual wiring during hardware bring-up and
     // swap RPWM/LPWM below if "open" and "close" are reversed.
     digitalWrite(PIN_MOTOR_SLEEP, HIGH);
