@@ -33,6 +33,8 @@ public:
     bool update_schedule(const Config& config, const DateTime& now);
 
     bool addAction(const Action& action);
+    // Drop door actions due after now (e.g. after a config change).
+    void removeFutureDoorActions(const DateTime& now);
     Action popFirstDueAction(const DateTime& now);
 
     const Action* nextAction() const;

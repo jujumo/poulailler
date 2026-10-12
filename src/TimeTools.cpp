@@ -1,6 +1,7 @@
 #include "TimeTools.h"
 
 #include <Dusk2Dawn.h>
+#include "Debug.h"
 #include <time.h>
 
 
@@ -39,8 +40,8 @@ DateTime convert_timeofday_to_time(int timeofday, const DateTime& now)
 }
 
 // Dusk2Dawn returns -1 for polar day/night, and doesn't wrap its result into
-// [0, 1440) for extreme timezone/longitude combinations - normalize here so
-// callers only ever see well-formed minute-of-day values.
+// [0, 1440) for extreme timezone/longitude combinations - such values are
+// reported with a warning and replaced by midnight (UTC) of the given day.
 //
 // (year, month, day) is a UTC calendar date, and the result is UTC-native:
 // passing timezone=0/isDST=false makes Dusk2Dawn return its raw UTC minutes
@@ -60,6 +61,10 @@ DateTime compute_sunrise_for_today(
     const int month = now_utc.month();
     const int day = now_utc.day();
     const int minutes_to_evt = location.sunrise(year, month, day, /*isDST=*/false);
+    if (minutes_to_evt < 0 || minutes_to_evt >= 24 * 60) {
+        TRACEF("[TimeTools] WARNING: invalid sunrise (%d min), using midnight", minutes_to_evt);
+        return DateTime(year, month, day, 0, 0, 0);
+    }
 
     DateTime sunevt_ts(now_utc.year(), now_utc.month(), now_utc.day(),
         minutes_to_evt / 60, minutes_to_evt % 60, 0);
@@ -76,6 +81,10 @@ DateTime compute_sunset_for_today(
     const int month = now_utc.month();
     const int day = now_utc.day();
     const int minutes_to_evt = location.sunset(year, month, day, /*isDST=*/false);
+    if (minutes_to_evt < 0 || minutes_to_evt >= 24 * 60) {
+        TRACEF("[TimeTools] WARNING: invalid sunset (%d min), using midnight", minutes_to_evt);
+        return DateTime(year, month, day, 0, 0, 0);
+    }
 
     DateTime sunevt_ts(year, month, day,
         minutes_to_evt / 60, minutes_to_evt % 60, 0);

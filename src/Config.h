@@ -67,6 +67,7 @@ struct Config {
 
 namespace ConfigStore {
     void clear();  // Clear all stored config values in case of firmware recompile.
+    bool resetIfFirmwareChanged();  // clear() on first boot of a newly flashed firmware.
     Config load();   // load from NVS, returning defaults for any missing fields
     bool save(const Config& cfg);
     void print(const Config& cfg);

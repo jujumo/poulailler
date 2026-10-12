@@ -1,6 +1,7 @@
 #include "Config.h"
 #include "Debug.h"
 #include <Preferences.h>
+#include <esp_app_desc.h>
 
 namespace ConfigStore {
 
@@ -14,6 +15,26 @@ void clear()
     prefs.begin(NAMESPACE, /*readOnly=*/false);
     prefs.clear();
     prefs.end();
+}
+
+
+bool resetIfFirmwareChanged()
+{
+    // Firmware identity: prefix of the ELF SHA-256 embedded in the app image.
+    char sha[17];
+    esp_app_get_elf_sha256(sha, sizeof(sha));
+
+    Preferences prefs;
+    prefs.begin(NAMESPACE, /*readOnly=*/false);
+    const bool changed = prefs.getString("fw_sha", "") != sha;
+    if (changed) {
+        TRACEF("[Config] new firmware %s: clearing stored config", sha);
+        prefs.clear();
+        prefs.putString("fw_sha", sha);
+    }
+    prefs.end();
+
+    return changed;
 }
 
 

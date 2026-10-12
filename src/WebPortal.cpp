@@ -505,12 +505,13 @@ void WebPortal::handleSaveConfig()
     }
 
     config_ = next;
-    TRACE("[WebPortal] Config after modifcation");
-    //ConfigStore::print(config_);
-    ConfigStore::save(config_);
-    config_ = ConfigStore::load();
-    TRACE("[WebPortal] Config after reload");
-    //ConfigStore::print(config_);
+
+    // Re-plan door actions with the new config.
+    if (sleep_manager_.isTimeValid()) {
+        const DateTime schedule_now = sleep_manager_.now();
+        scheduler_.removeFutureDoorActions(schedule_now);
+        scheduler_.update_schedule(config_, schedule_now);
+    }
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }

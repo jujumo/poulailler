@@ -51,6 +51,7 @@ void setup()
     pinMode(PIN_STATUS_LED, OUTPUT);
     digitalWrite(PIN_STATUS_LED, HIGH);
 
+    ConfigStore::resetIfFirmwareChanged();
     Config config = ConfigStore::load();
     TRACE("[Boot] config loaded!");
     ConfigStore::print(config);
@@ -106,7 +107,6 @@ void setup()
     {
         TRACE("[main] power-on/reset/error: Override due action");
         scheduler.clear(); // lets start on clean slate (in case of power-on/reset)
-        ConfigStore::clear();
         due_action = Scheduler::Action(now, Scheduler::ActionType::WifiService);
     } 
     else 

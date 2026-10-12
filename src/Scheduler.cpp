@@ -253,6 +253,19 @@ bool Scheduler::addAction(const Action& action)
     return save();
 }
 
+void Scheduler::removeFutureDoorActions(const DateTime& now)
+{
+    size_t kept = 0;
+    for (size_t i = 0; i < count_; ++i) {
+        if (is_door_action(actions_[i]) && actions_[i].timestamp > now) {
+            continue;
+        }
+        actions_[kept++] = actions_[i];
+    }
+    count_ = kept;
+    save();
+}
+
 /*bool Scheduler::popDueAction(const DateTime& now, Action& action)
 {
     if (count_ == 0) {
@@ -381,7 +394,10 @@ String action_to_string(const Scheduler::Action& action)
 
 String scheduler_to_string(const Scheduler& scheduler)
 {
-    String result("[Scheduler] %u action(s)\n", scheduler.count());
+    char header[32];
+    snprintf(header, sizeof(header), "[Scheduler] %u action(s)\n",
+             static_cast<unsigned>(scheduler.count()));
+    String result(header);
     for (size_t i = 0; i < scheduler.count(); ++i) {
         const Scheduler::Action* action_ptr = scheduler.get(i);
         result += action_to_string(*action_ptr) + String("\n");
