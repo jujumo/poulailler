@@ -104,8 +104,8 @@ and owns the `Config` structure.
 It persists:
 
 - latitude and longitude,
-- timezone (utc offset),
-- schedule mode and absolute/sun-offset values,
+- timezone (POSIX TZ rule string, DST included),
+- schedule mode and fixed-time (local minutes since midnight) / sun-offset values,
 - motor timing configuration,
 
 This is the durable source of truth for configuration and state across sleep cycles.
@@ -125,7 +125,8 @@ It is responsible for:
 - entering ESP32 deep sleep.
 
 The RTC always stores UTC. The firmware converts to local time only when
-showing the wall-clock value or accepting user input.
+showing the wall-clock value, accepting user input, or resolving a fixed
+local open/close time to a UTC instant for a given day.
 
 `main.cpp` should not directly manipulate the DS3231 alarm or enter deep sleep.
 
@@ -140,7 +141,9 @@ showing the wall-clock value or accepting user input.
 
 Time operations available:
 
-- convert UTC <-> Local
+- convert UTC <-> Local through a POSIX TZ rule (`setenv("TZ")`/`tzset()`
+  + `localtime_r()`/`mktime()` from the libc), so DST transitions are
+  handled by the C library with no network access and no custom rule code
 - compute the time of sunrise/sunset for a given day+position
 - convert DateTime <-> Time of day
 - convert Time (or Time of day) <-> hh:mm string
@@ -152,7 +155,9 @@ Time operations available:
 It is responsible for:
 
 - keeping a sorted list of scheduled actions,
-- updating schedule targets (in UTC),
+- updating schedule targets (in UTC; a fixed local time is resolved on the
+  local calendar date of each target day, so it stays constant in local
+  time across DST changes),
 - comparing current time to those targets,
 - deciding whether a scheduled action is due,
 - choosing which action should be handled next.
@@ -286,7 +291,8 @@ Otherwise the interrupt line can remain asserted and the device re-wakes immedia
 ### All schedule comparison should be in UTC
 
 The hardware clock stores UTC, and the schedule is resolved in UTC before any comparison or action.
-Local-time values are only used for display and user input.
+Local-time values are only used for display, user input, and as the stored form
+of fixed open/close times (converted to UTC per day by the scheduler).
 
 ### All long-lived state belongs in persistent storage
 

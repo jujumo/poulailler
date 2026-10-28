@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 // LED indicator (blue LED on most ESP32 boards)
 #define PIN_STATUS_LED GPIO_NUM_15
@@ -26,7 +27,10 @@ constexpr uint32_t kMotorOpenDurationMs = 4500;
 // default config settings
 #define DEFAULT_LATITUE 45.1885f
 #define DEFAULT_LONGITUDE 5.7245f
-#define DEFAULT_UTC_OFFSET 2
+// POSIX TZ rule (interpreted by the libc, DST included). Europe/Paris here;
+// see the timezone <select> in WebPortalTemplate.h for other common values.
+#define DEFAULT_TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
+constexpr size_t kTimezoneMaxLen = 48;  // including the trailing NUL
 
 enum class ScheduleMode : uint8_t {
     TIME_OF_DAY = 0,
@@ -47,14 +51,16 @@ struct Config {
     // edit in the config page, not tied to any real deployment.
     float latitude   = DEFAULT_LATITUE;
     float longitude  = DEFAULT_LONGITUDE;
-    float utc_offset = DEFAULT_UTC_OFFSET;
-	
+    char timezone[kTimezoneMaxLen] = DEFAULT_TIMEZONE;  // POSIX TZ string
+
+    // Fixed times are stored as LOCAL minutes since midnight and converted
+    // to UTC day by day by the Scheduler, so they survive DST changes.
     ScheduleMode open_mode = ScheduleMode::TIME_OF_DAY;
-    uint16_t open_timeofday_utc = 300;   // UTC time-of-day (540 = 5h -> 7h local)
+    uint16_t open_timeofday_local = 420;   // 07:00 local
     int16_t open_sun_offset = 0;  // relative to sunrise
 
     ScheduleMode close_mode = ScheduleMode::SUN_OFFSET;
-    uint16_t close_timeofday_utc = 1140;   // UTC time-of-day (1380 = 19h -> 21h local)
+    uint16_t close_timeofday_local = 1260; // 21:00 local
     int16_t close_sun_offset = 30; // relative to sunset
 
     uint32_t motor_open_duration_ms = kMotorOpenDurationMs;

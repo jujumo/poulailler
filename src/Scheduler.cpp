@@ -29,15 +29,19 @@ Scheduler::Action scheduled_event_for_day(
     bool closing = !opening;
     door_action.type = opening ? Scheduler::ActionType::DoorOpen 
                                : Scheduler::ActionType::DoorClose;
-    // handle time of day envent
-    if (opening && config.open_mode == ScheduleMode::TIME_OF_DAY) 
+    // handle time of day event: fixed times are LOCAL minutes since
+    // midnight. Resolve them on the local calendar date of this UTC day
+    // (noon UTC maps to the same local date for any offset within +/-12h),
+    // then convert back to UTC with the DST rule that applies on that date.
+    if ((opening && config.open_mode == ScheduleMode::TIME_OF_DAY)
+        || (closing && config.close_mode == ScheduleMode::TIME_OF_DAY))
     {
-        door_action.timestamp = day_midnight + TimeSpan(config.open_timeofday_utc * 60L);
-    }
-
-    if ( closing && config.close_mode == ScheduleMode::TIME_OF_DAY ) 
-    {
-        door_action.timestamp = day_midnight + TimeSpan(config.close_timeofday_utc * 60L);
+        const uint16_t timeofday_local = opening ? config.open_timeofday_local
+                                                 : config.close_timeofday_local;
+        const DateTime local_noon = TimeTools::convert_utc_to_local(
+            day_midnight + TimeSpan(0, 12, 0, 0), config.timezone);
+        const DateTime local_ts = TimeTools::convert_timeofday_to_time(timeofday_local, local_noon);
+        door_action.timestamp = TimeTools::convert_local_to_utc(local_ts, config.timezone);
     }
 
     // handle sun event

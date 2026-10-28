@@ -1,6 +1,7 @@
 #include "Config.h"
 #include "Debug.h"
 #include <Preferences.h>
+#include <cstring>
 #include <esp_app_desc.h>
 
 namespace ConfigStore {
@@ -45,14 +46,18 @@ Config load() {
     prefs.begin(NAMESPACE, /*readOnly=*/true);
     cfg.latitude   = prefs.getFloat("latitude", cfg.latitude);
     cfg.longitude  = prefs.getFloat("longitude", cfg.longitude);
-    cfg.utc_offset = prefs.getFloat("utc_offset", cfg.utc_offset);
+    {
+        const String tz = prefs.getString("tz", cfg.timezone);
+        strncpy(cfg.timezone, tz.c_str(), sizeof(cfg.timezone) - 1);
+        cfg.timezone[sizeof(cfg.timezone) - 1] = '\0';
+    }
 
     cfg.open_mode = static_cast<ScheduleMode>(prefs.getUChar("open_mode", static_cast<uint8_t>(cfg.open_mode)));
-    cfg.open_timeofday_utc = prefs.getUShort("open_utc", cfg.open_timeofday_utc);
+    cfg.open_timeofday_local = prefs.getUShort("open_local", cfg.open_timeofday_local);
     cfg.open_sun_offset = static_cast<int16_t>(prefs.getShort("open_sun_off", cfg.open_sun_offset));
 
     cfg.close_mode = static_cast<ScheduleMode>(prefs.getUChar("close_mode", static_cast<uint8_t>(cfg.close_mode)));
-    cfg.close_timeofday_utc = prefs.getUShort("close_utc", cfg.close_timeofday_utc);
+    cfg.close_timeofday_local = prefs.getUShort("close_local", cfg.close_timeofday_local);
     cfg.close_sun_offset = static_cast<int16_t>(prefs.getShort("close_sun_off", cfg.close_sun_offset));
 
     cfg.motor_open_duration_ms = prefs.getULong("motor_open_ms", cfg.motor_open_duration_ms);
@@ -70,31 +75,33 @@ bool save(const Config& cfg) {
     Preferences prefs;
     prefs.begin(NAMESPACE, /*readOnly=*/false);
 
-    size_t written = 0;
+    // Every put*() returns the number of bytes written, 0 on failure.
+    unsigned failures = 0;
+    auto check = [&failures](size_t written) { if (written == 0) ++failures; };
 
-    written += prefs.putFloat("latitude", cfg.latitude);
-    written += prefs.putFloat("longitude", cfg.longitude);
-    written += prefs.putFloat("utc_offset", cfg.utc_offset);
-    written += prefs.putUChar("open_mode", static_cast<uint8_t>(cfg.open_mode));
-    written += prefs.putUShort("open_utc", cfg.open_timeofday_utc);
-    written += prefs.putShort("open_sun_off", cfg.open_sun_offset);
-    written += prefs.putUChar("close_mode", static_cast<uint8_t>(cfg.close_mode));
-    written += prefs.putUShort("close_utc", cfg.close_timeofday_utc);
-    written += prefs.putShort("close_sun_off", cfg.close_sun_offset);
-    written += prefs.putULong("motor_open_ms", cfg.motor_open_duration_ms);
-    written += prefs.putULong("motor_close_ms", cfg.motor_close_duration_ms);
-    written += prefs.putBool("motor_invert", cfg.motor_invert_direction);
-    written += prefs.putBool("configured", cfg.configured);
+    check(prefs.putFloat("latitude", cfg.latitude));
+    check(prefs.putFloat("longitude", cfg.longitude));
+    check(prefs.putString("tz", cfg.timezone));
+    check(prefs.putUChar("open_mode", static_cast<uint8_t>(cfg.open_mode)));
+    check(prefs.putUShort("open_local", cfg.open_timeofday_local));
+    check(prefs.putShort("open_sun_off", cfg.open_sun_offset));
+    check(prefs.putUChar("close_mode", static_cast<uint8_t>(cfg.close_mode)));
+    check(prefs.putUShort("close_local", cfg.close_timeofday_local));
+    check(prefs.putShort("close_sun_off", cfg.close_sun_offset));
+    check(prefs.putULong("motor_open_ms", cfg.motor_open_duration_ms));
+    check(prefs.putULong("motor_close_ms", cfg.motor_close_duration_ms));
+    check(prefs.putBool("motor_invert", cfg.motor_invert_direction));
+    check(prefs.putBool("configured", cfg.configured));
 
-    if (written != 32) 
+    if (failures != 0)
     {
-        TRACEF( "[Config/save] ERROR written=%u/32, free entries=%u\n",
-                 static_cast<unsigned>(written), prefs.freeEntries()
+        TRACEF( "[Config/save] ERROR %u field(s) not written, free entries=%u\n",
+                 failures, prefs.freeEntries()
         );
     }
     prefs.end();
 
-    return written == 32;
+    return failures == 0;
 }
 
 void print(const Config& cfg)
@@ -103,17 +110,17 @@ void print(const Config& cfg)
 
     TRACEF("[Config]   latitude: %.6f", cfg.latitude);
     TRACEF("[Config]   longitude: %.6f", cfg.longitude);
-    TRACEF("[Config]   utc_offset: %.2f", cfg.utc_offset);
+    TRACEF("[Config]   timezone: %s", cfg.timezone);
     TRACEF(
-        "[Config]   open: mode=%u timeofday=%u sun_offset=%d",
+        "[Config]   open: mode=%u timeofday_local=%u sun_offset=%d",
         static_cast<unsigned>(cfg.open_mode),
-        static_cast<unsigned>(cfg.open_timeofday_utc),
+        static_cast<unsigned>(cfg.open_timeofday_local),
         static_cast<int>(cfg.open_sun_offset)
     );
     TRACEF(
-        "[Config]   close: mode=%u timeofday=%u sun_offset=%d",
+        "[Config]   close: mode=%u timeofday_local=%u sun_offset=%d",
         static_cast<unsigned>(cfg.close_mode),
-        static_cast<unsigned>(cfg.close_timeofday_utc),
+        static_cast<unsigned>(cfg.close_timeofday_local),
         static_cast<int>(cfg.close_sun_offset)
     );
     TRACEF(

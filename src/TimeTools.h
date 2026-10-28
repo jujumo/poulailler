@@ -7,16 +7,20 @@
 //  - DateTime: a full timestamp, in a struct provided by RTC lib
 //  - time of day: a number of minutes since 00:00 sored in integer
 // Time operations availables:
-// - convert UTC <-> Local
+// - convert UTC <-> Local (POSIX TZ rule, DST aware)
 // - conpute the time of sunrise/sunset for a given day+position
 // - convert DateTime <-> Time of day
 // - convert Time (or Time of day) <-> hh:mm string
 
 namespace TimeTools {
 
-// UTC <-> Local
-DateTime convert_utc_to_local(const DateTime& timestamp, const float utc_offset);
-DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset);
+// UTC <-> Local, through a POSIX TZ rule string (e.g. "CET-1CEST,M3.5.0,M10.5.0/3")
+// interpreted by the libc, DST included.
+DateTime convert_utc_to_local(const DateTime& timestamp_utc, const char* tz);
+DateTime convert_local_to_utc(const DateTime& timestamp_local, const char* tz);
+bool is_dst(const DateTime& timestamp_utc, const char* tz);      // DST in effect at that instant?
+String tz_abbreviation(const DateTime& timestamp_utc, const char* tz);  // "CET" / "CEST" / ...
+bool is_valid_posix_tz(const char* tz);  // syntactic check only
 
 // DateTime <-> timeofday
 int convert_time_to_timeofday(const DateTime& timestamp);

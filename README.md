@@ -65,8 +65,12 @@ make monitor
    `http://192.168.4.1/` manually.
 3. Click **"Sync time from this device"** first — the DS3231 has no other
    time source, so accuracy depends entirely on your phone/laptop clock.
-4. Set latitude/longitude and the UTC offset (in hours). DST is not
-   handled automatically — update the offset when the clocks change.
+4. Set latitude/longitude and the time zone. Pick it from the list, or
+   click **"Detect from this device"** to take your phone/laptop's zone.
+   The zone is a POSIX TZ rule (e.g. `CET-1CEST,M3.5.0,M10.5.0/3`), so
+   daylight saving changes are applied automatically, offline, with no
+   further action. Any zone not in the list can be entered as a custom
+   POSIX TZ string.
 5. Choose open/close mode (fixed time, or offset from sunrise/sunset) and
    save. A fixed time is entered in local time; each fieldset shows the
    resolved open/close time in both UTC and local, since UTC is what's

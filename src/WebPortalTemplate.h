@@ -88,6 +88,11 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
         .preview {
             font-weight: bold;
         }
+
+        .hint {
+            color: #555;
+            font-size: .9em;
+        }
     </style>
 </head>
 
@@ -125,14 +130,32 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
             <legend>Current RTC time</legend>
             {{NOW_SUFFIX}}
             <p>UTC time  : {{UTC_TIME}}</p>
-            <p>Local time: <strong>{{LOCAL_TIME}}</strong></p>
-            <label> UTC offset:
-                <input
-                    type='number'
-                    step='1'
-                    name='utc_offset'
-                    value='{{UTC_OFFSET}}'>
+            <p>Local time: <strong>{{LOCAL_TIME}}</strong> {{TZ_ABBREV}}
+               (DST active: {{DST_ACTIVE}})</p>
+            <label> Time zone (DST handled automatically):
+                <select name='timezone' id='timezone' onchange='tz_changed()'>
+                    <option value='CET-1CEST,M3.5.0,M10.5.0/3'>Europe/Paris, Berlin, Madrid, Rome (CET/CEST)</option>
+                    <option value='GMT0BST,M3.5.0/1,M10.5.0'>Europe/London, Dublin (GMT/BST)</option>
+                    <option value='WET0WEST,M3.5.0/1,M10.5.0'>Europe/Lisbon (WET/WEST)</option>
+                    <option value='EET-2EEST,M3.5.0/3,M10.5.0/4'>Europe/Athens, Helsinki, Kyiv (EET/EEST)</option>
+                    <option value='MSK-3'>Europe/Moscow (MSK)</option>
+                    <option value='EST5EDT,M3.2.0,M11.1.0'>America/New_York (EST/EDT)</option>
+                    <option value='CST6CDT,M3.2.0,M11.1.0'>America/Chicago (CST/CDT)</option>
+                    <option value='MST7MDT,M3.2.0,M11.1.0'>America/Denver (MST/MDT)</option>
+                    <option value='PST8PDT,M3.2.0,M11.1.0'>America/Los_Angeles (PST/PDT)</option>
+                    <option value='AEST-10AEDT,M10.1.0,M4.1.0/3'>Australia/Sydney (AEST/AEDT)</option>
+                    <option value='JST-9'>Asia/Tokyo (JST)</option>
+                    <option value='UTC0'>UTC (no DST)</option>
+                    <option value='custom'>Custom POSIX TZ string...</option>
+                </select>
             </label>
+            <label id='timezone_custom_label'> POSIX TZ string:
+                <input type='text' name='timezone_custom' id='timezone_custom'
+                       maxlength='47' placeholder='CET-1CEST,M3.5.0,M10.5.0/3'
+                       value='{{TIMEZONE}}'>
+            </label>
+            <button type='button' onclick='detect_timezone()'>Detect from this device</button>
+            <p id='tz_detected' class='hint'></p>
         </fieldset>
 
         <fieldset>
@@ -287,6 +310,117 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
     {{DEBUG_LOG_SECTION}}
 
     <script>
+        // IANA zone names (as reported by the browser) -> POSIX TZ strings
+        // offered in the <select>. Anything else falls back to a fixed
+        // offset rule built from getTimezoneOffset().
+        var kIanaToPosix = {
+            'Europe/Paris': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Berlin': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Madrid': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Rome': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Brussels': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Amsterdam': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Zurich': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Vienna': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Prague': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Warsaw': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Stockholm': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Oslo': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Copenhagen': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/Budapest': 'CET-1CEST,M3.5.0,M10.5.0/3',
+            'Europe/London': 'GMT0BST,M3.5.0/1,M10.5.0',
+            'Europe/Dublin': 'GMT0BST,M3.5.0/1,M10.5.0',
+            'Europe/Lisbon': 'WET0WEST,M3.5.0/1,M10.5.0',
+            'Atlantic/Canary': 'WET0WEST,M3.5.0/1,M10.5.0',
+            'Europe/Athens': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Helsinki': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Kyiv': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Kiev': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Bucharest': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Sofia': 'EET-2EEST,M3.5.0/3,M10.5.0/4',
+            'Europe/Moscow': 'MSK-3',
+            'America/New_York': 'EST5EDT,M3.2.0,M11.1.0',
+            'America/Toronto': 'EST5EDT,M3.2.0,M11.1.0',
+            'America/Detroit': 'EST5EDT,M3.2.0,M11.1.0',
+            'America/Chicago': 'CST6CDT,M3.2.0,M11.1.0',
+            'America/Denver': 'MST7MDT,M3.2.0,M11.1.0',
+            'America/Los_Angeles': 'PST8PDT,M3.2.0,M11.1.0',
+            'America/Vancouver': 'PST8PDT,M3.2.0,M11.1.0',
+            'Australia/Sydney': 'AEST-10AEDT,M10.1.0,M4.1.0/3',
+            'Australia/Melbourne': 'AEST-10AEDT,M10.1.0,M4.1.0/3',
+            'Asia/Tokyo': 'JST-9',
+            'UTC': 'UTC0',
+            'Etc/UTC': 'UTC0'
+        };
+
+        function tz_select_has(value) {
+            var select = document.getElementById('timezone');
+            for (var i = 0; i < select.options.length; i++) {
+                if (select.options[i].value === value) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function tz_changed() {
+            var select = document.getElementById('timezone');
+            var custom_label = document.getElementById('timezone_custom_label');
+            custom_label.style.display =
+                select.value === 'custom' ? 'block' : 'none';
+        }
+
+        function set_timezone(posix) {
+            var select = document.getElementById('timezone');
+            var custom = document.getElementById('timezone_custom');
+            if (tz_select_has(posix)) {
+                select.value = posix;
+            } else {
+                select.value = 'custom';
+            }
+            custom.value = posix;
+            tz_changed();
+        }
+
+        // Fixed-offset POSIX rule from the browser's current UTC offset,
+        // e.g. UTC+2 -> "<+02>-2" (POSIX offsets are west-positive).
+        function posix_fixed_offset(minutes_east) {
+            var sign_name = minutes_east < 0 ? '-' : '+';
+            var sign_rule = minutes_east < 0 ? '' : '-';
+            var abs = Math.abs(minutes_east);
+            var hh = Math.floor(abs / 60);
+            var mm = abs % 60;
+            var name = sign_name + (hh < 10 ? '0' : '') + hh + (mm ? (mm < 10 ? '0' : '') + mm : '');
+            var rule = sign_rule + hh + (mm ? ':' + (mm < 10 ? '0' : '') + mm : '');
+            return '<' + name + '>' + rule;
+        }
+
+        function detect_timezone() {
+            var iana = '';
+            try {
+                iana = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+            } catch (e) {}
+            var minutes_east = -new Date().getTimezoneOffset();
+            var posix = kIanaToPosix[iana];
+            var note = document.getElementById('tz_detected');
+            if (posix) {
+                set_timezone(posix);
+                note.textContent = 'Your device reports ' + iana
+                    + ' - selected. Save settings to apply.';
+            } else {
+                set_timezone(posix_fixed_offset(minutes_east));
+                note.textContent = 'Your device reports ' + (iana || 'an unknown zone')
+                    + ' (UTC' + (minutes_east >= 0 ? '+' : '') + (minutes_east / 60)
+                    + '), not in the list: a fixed offset without DST was filled '
+                    + 'in. Edit the POSIX TZ string if you need a DST rule, '
+                    + 'then save settings.';
+            }
+        }
+
+        // Preselect the <select> from the firmware's current setting (the
+        // custom input's value attribute, HTML-decoded by the browser).
+        set_timezone(document.getElementById('timezone_custom').value);
+
         function fill_time(form) {
             var date = new Date();
 

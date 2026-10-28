@@ -3,27 +3,106 @@
 #include <Dusk2Dawn.h>
 #include "Debug.h"
 #include <time.h>
+#include <cstring>
+#include <cstdlib>
+#include <cctype>
 
 
 namespace TimeTools {
 
-DateTime convert_utc_to_local(const DateTime& timestamp, const float utc_offset)
-{
-    // Convert the offset from hours to seconds.
-    const int32_t offsetSeconds =
-        static_cast<int32_t>(utc_offset * 3600.0f);
+namespace {
 
-    return DateTime(timestamp.unixtime() + offsetSeconds);
+// Point the libc at the given POSIX TZ rule. Cached: setenv()+tzset() is
+// only redone when the string actually changes.
+void apply_tz(const char* tz)
+{
+    static char current[kTimezoneMaxLen] = "";
+    if (tz == nullptr || *tz == '\0') {
+        tz = "UTC0";
+    }
+    if (strncmp(current, tz, sizeof(current)) == 0) {
+        return;
+    }
+    strncpy(current, tz, sizeof(current) - 1);
+    current[sizeof(current) - 1] = '\0';
+    setenv("TZ", current, 1);
+    tzset();
+}
+
+void to_local_tm(const DateTime& timestamp_utc, const char* tz, struct tm& out)
+{
+    apply_tz(tz);
+    time_t t = static_cast<time_t>(timestamp_utc.unixtime());
+    localtime_r(&t, &out);
+}
+
+}  // namespace
+
+
+DateTime convert_utc_to_local(const DateTime& timestamp_utc, const char* tz)
+{
+    struct tm lt;
+    to_local_tm(timestamp_utc, tz, lt);
+    return DateTime(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday,
+                    lt.tm_hour, lt.tm_min, lt.tm_sec);
 }
 
 
-DateTime convert_local_to_utc(const DateTime& timestamp, const float utc_offset)
+DateTime convert_local_to_utc(const DateTime& timestamp_local, const char* tz)
 {
-    // Convert the offset from hours to seconds.
-    const int32_t offsetSeconds =
-        static_cast<int32_t>(utc_offset * 3600.0f);
+    apply_tz(tz);
+    struct tm lt = {};
+    lt.tm_year = timestamp_local.year() - 1900;
+    lt.tm_mon  = timestamp_local.month() - 1;
+    lt.tm_mday = timestamp_local.day();
+    lt.tm_hour = timestamp_local.hour();
+    lt.tm_min  = timestamp_local.minute();
+    lt.tm_sec  = timestamp_local.second();
+    lt.tm_isdst = -1;  // let the libc decide (handles the DST switch days)
+    const time_t t = mktime(&lt);
+    return DateTime(static_cast<uint32_t>(t));
+}
 
-    return DateTime(timestamp.unixtime() - offsetSeconds);
+
+bool is_dst(const DateTime& timestamp_utc, const char* tz)
+{
+    struct tm lt;
+    to_local_tm(timestamp_utc, tz, lt);
+    return lt.tm_isdst > 0;
+}
+
+
+String tz_abbreviation(const DateTime& timestamp_utc, const char* tz)
+{
+    struct tm lt;
+    to_local_tm(timestamp_utc, tz, lt);
+    char buf[16];
+    if (strftime(buf, sizeof(buf), "%Z", &lt) == 0) {
+        return String("");
+    }
+    return String(buf);
+}
+
+
+// newlib's tzset() silently falls back to UTC on a malformed rule, so at
+// least reject the obviously wrong inputs here: empty, too long, non
+// printable ASCII, or not starting with a std name (>=3 letters or <...>).
+bool is_valid_posix_tz(const char* tz)
+{
+    if (tz == nullptr) return false;
+    const size_t len = strnlen(tz, kTimezoneMaxLen);
+    if (len == 0 || len >= kTimezoneMaxLen) return false;
+    for (size_t i = 0; i < len; ++i) {
+        const unsigned char c = static_cast<unsigned char>(tz[i]);
+        if (c < 0x21 || c > 0x7E) return false;  // no spaces / control / non-ASCII
+        if (c == '\'' || c == '"' || c == '\\') return false;  // never legal in a TZ rule, keeps the HTML simple
+    }
+    if (tz[0] == '<') {
+        return strchr(tz, '>') != nullptr;
+    }
+    size_t letters = 0;
+    while (letters < len && isalpha(static_cast<unsigned char>(tz[letters]))) ++letters;
+    return letters >= 3;
 }
 
 

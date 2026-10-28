@@ -1,6 +1,7 @@
 #include "WebPortal.h"
 
 #include <WiFi.h>
+#include <cstring>
 
 #include "Debug.h"
 #include "Scheduler.h"
@@ -30,9 +31,7 @@ bool valid_timeofday(int timeofday)
     return timeofday >= 0 && timeofday < 24 * 60;
 }
 
-#ifdef DEBUG_TRACES
-
-String html_escape_trace_log(const String& input)
+String html_escape(const String& input)
 {
     String output;
     output.reserve(input.length());
@@ -50,8 +49,6 @@ String html_escape_trace_log(const String& input)
     }
     return output;
 }
-
-#endif
 
 }  // namespace
 
@@ -199,7 +196,8 @@ String WebPortal::buildIndexHtml()
     String html(kIndexPageTemplate);
     String status_block;
     const DateTime now_utc = sleep_manager_.now();
-    const DateTime now_local = convert_utc_to_local(now_utc, config_.utc_offset);
+    const char* tz = config_.timezone;
+    const DateTime now_local = convert_utc_to_local(now_utc, tz);
     const float lat = config_.latitude;
     const float lon = config_.longitude;
 
@@ -211,11 +209,11 @@ String WebPortal::buildIndexHtml()
     html.replace("{{STATUS_BLOCK}}", status_block);
     html.replace( "{{COMPILE_TIME}}", String(__DATE__) + " " + __TIME__ );
 
-    char utc_offset_str[16];
-    snprintf(utc_offset_str, sizeof(utc_offset_str), "%g", static_cast<double>(config_.utc_offset));
     html.replace( "{{UTC_TIME}}", convert_time_to_string(now_utc) );
     html.replace( "{{LOCAL_TIME}}", convert_time_to_string(now_local) );
-    html.replace( "{{UTC_OFFSET}}", utc_offset_str );
+    html.replace( "{{TZ_ABBREV}}", tz_abbreviation(now_utc, tz) );
+    html.replace( "{{DST_ACTIVE}}", is_dst(now_utc, tz) ? "yes" : "no" );
+    html.replace( "{{TIMEZONE}}", html_escape(tz) );
     html.replace( "{{NOW_SUFFIX}}", sleep_manager_.isTimeValid()
             ? ""
             : "<p class='rtc-alert'>RTC INVALID: set the time before "
@@ -226,33 +224,28 @@ String WebPortal::buildIndexHtml()
     html.replace( "{{LONGITUDE}}", String(lon, 4) );
 
     const DateTime sunrise_utc = compute_sunrise_for_today( lat, lon, now_utc );
-    const DateTime sunrise_local = convert_utc_to_local( sunrise_utc, config_.utc_offset );
+    const DateTime sunrise_local = convert_utc_to_local( sunrise_utc, tz );
 
     html.replace( "{{SUNRISE_LOCAL}}", convert_time_to_string(sunrise_local) );
     html.replace( "{{SUNRISE_UTC}}", convert_time_to_string(sunrise_utc));
 
     const DateTime sunset_utc = compute_sunset_for_today( lat, lon, now_utc);
-    const DateTime sunset_local = convert_utc_to_local( sunset_utc, config_.utc_offset );
+    const DateTime sunset_local = convert_utc_to_local( sunset_utc, tz );
 
     html.replace( "{{SUNSET_LOCAL}}", convert_time_to_string(sunset_local));
     html.replace( "{{SUNSET_UTC}}", convert_time_to_string(sunset_utc));
 
-    const int open_timeofday_local =
-		convert_time_to_timeofday
-		(
-			convert_utc_to_local
-			(
-				convert_timeofday_to_time(config_.open_timeofday_utc, now_utc),
-				config_.utc_offset
-			)
-        );
+    // Fixed times are stored in local minutes; show today's UTC equivalent
+    // (it moves with DST) next to it.
+    const int open_timeofday_local = config_.open_timeofday_local;
+    const int open_timeofday_utc = convert_time_to_timeofday(
+        convert_local_to_utc(convert_timeofday_to_time(open_timeofday_local, now_local), tz));
 
     html.replace( "{{OPEN_TIMEOFDAY_CHECKED}}", config_.open_mode == ScheduleMode::TIME_OF_DAY
                                                 ? " checked"
                                                 : ""
     );
     html.replace( "{{OPEN_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(open_timeofday_local) );
-    const int open_timeofday_utc = config_.open_timeofday_utc;
     html.replace( "{{OPEN_TIMEOFDAY_UTC}}", convert_timeofday_to_string(open_timeofday_utc) );
     html.replace( "{{OPEN_SUN_CHECKED}}", config_.open_mode == ScheduleMode::SUN_OFFSET
                                         ? " checked"
@@ -261,15 +254,9 @@ String WebPortal::buildIndexHtml()
 
     html.replace( "{{OPEN_SUN_OFFSET}}", String(config_.open_sun_offset) );
 
-    const int close_timeofday_local =
-		convert_time_to_timeofday
-		(
-			convert_utc_to_local
-			(
-				convert_timeofday_to_time(config_.close_timeofday_utc, now_utc),
-				config_.utc_offset
-			)
-        );
+    const int close_timeofday_local = config_.close_timeofday_local;
+    const int close_timeofday_utc = convert_time_to_timeofday(
+        convert_local_to_utc(convert_timeofday_to_time(close_timeofday_local, now_local), tz));
 
     html.replace( "{{CLOSE_TIMEOFDAY_CHECKED}}", config_.close_mode == ScheduleMode::TIME_OF_DAY
                                             ? " checked"
@@ -277,7 +264,6 @@ String WebPortal::buildIndexHtml()
     );
 
     html.replace( "{{CLOSE_TIMEOFDAY_LOCAL}}", convert_timeofday_to_string(close_timeofday_local) );
-    const int close_timeofday_utc = config_.close_timeofday_utc;
     html.replace( "{{CLOSE_TIMEOFDAY_UTC}}", convert_timeofday_to_string(close_timeofday_utc) );
     html.replace( "{{CLOSE_SUN_CHECKED}}", config_.close_mode == ScheduleMode::SUN_OFFSET
             ? " checked"
@@ -315,7 +301,7 @@ String WebPortal::buildIndexHtml()
 
 #   ifdef DEBUG_TRACES
     String debug_section(kDebugLogSectionTemplate);
-    debug_section.replace( "{{DEBUG_LOG}}", html_escape_trace_log(TraceLog::snapshot()) );
+    debug_section.replace( "{{DEBUG_LOG}}", html_escape(TraceLog::snapshot()) );
     html.replace( "{{DEBUG_LOG_SECTION}}", debug_section );
 #   else
     html.replace("{{DEBUG_LOG_SECTION}}", "");
@@ -350,7 +336,6 @@ void WebPortal::handleSaveConfig()
 {
     Config next = config_;
     bool ok = true;
-	const DateTime now_utc = sleep_manager_.now();
 
     TRACEF(
         "[WebPortal] POST /save: "
@@ -385,11 +370,17 @@ void WebPortal::handleSaveConfig()
         }
     }
 
-    if (server_.hasArg("utc_offset")) {
-        const float value = server_.arg("utc_offset").toFloat();
-        if (in_range(value, -12.0f, 12.0f)) {
-            next.utc_offset = value;
+    if (server_.hasArg("timezone")) {
+        String tz = server_.arg("timezone");
+        if (tz == "custom") {
+            tz = server_.arg("timezone_custom");
+            tz.trim();
+        }
+        if (is_valid_posix_tz(tz.c_str())) {
+            strncpy(next.timezone, tz.c_str(), sizeof(next.timezone) - 1);
+            next.timezone[sizeof(next.timezone) - 1] = '\0';
         } else {
+            TRACEF("[WebPortal] POST /save: invalid timezone '%s'", tz.c_str());
             ok = false;
         }
     }
@@ -405,15 +396,7 @@ void WebPortal::handleSaveConfig()
                                             server_.arg("open_timeofday_local"));
         if (valid_timeofday(open_timeofday_local)) 
         {
-            next.open_timeofday_utc = 
-                convert_time_to_timeofday
-				(
-					convert_local_to_utc
-					(
-						convert_timeofday_to_time(open_timeofday_local, now_utc),
-						next.utc_offset
-					)
-                );
+            next.open_timeofday_local = static_cast<uint16_t>(open_timeofday_local);
         } else {
             ok = false;
         }
@@ -442,15 +425,7 @@ void WebPortal::handleSaveConfig()
             );
 
         if (valid_timeofday(close_timeofday_local)) {
-            next.close_timeofday_utc =
-                convert_time_to_timeofday
-				(
-					convert_local_to_utc
-					(
-						convert_timeofday_to_time(close_timeofday_local, now_utc),
-						next.utc_offset
-					)
-                );
+            next.close_timeofday_local = static_cast<uint16_t>(close_timeofday_local);
         } else {
             ok = false;
         }
