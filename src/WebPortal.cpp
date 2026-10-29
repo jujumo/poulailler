@@ -487,6 +487,15 @@ void WebPortal::handleSaveConfig()
         scheduler_.removeFutureDoorActions(schedule_now);
         scheduler_.update_schedule(config_, schedule_now);
     }
+
+    // "Save settings and sleep" button: same mechanism as handleSleepNow().
+    if (server_.arg("then") == "sleep") {
+        TRACE("[WebPortal] POST /save: saved, sleep requested");
+        server_.send(200, "text/plain", "Settings saved. Going to sleep now.");
+        stopRequested_ = true;
+        return;
+    }
+
     statusMessage_ = "Settings saved.";
     redirectToRoot();
 }

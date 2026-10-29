@@ -262,6 +262,7 @@ constexpr const char kIndexPageTemplate[] = R"HTML(
         <fieldset class='config'>
             <legend>config</legend>
             <button type='submit'>Save settings</button>
+            <button type='submit' name='then' value='sleep'>Save settings and sleep</button>
         </fieldset>
     </form>
 
